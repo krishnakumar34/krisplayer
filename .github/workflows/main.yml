@@ -1,4 +1,4 @@
-name: Build TiviMate Pro Fixed
+name: Build TiviMate Pro Fixed V2
 
 on: [push, workflow_dispatch]
 
@@ -15,10 +15,7 @@ jobs:
         # ---------------------------------------------------------
         # STEP 1: SAFE WRAPPER GENERATION
         # ---------------------------------------------------------
-        # Create an empty settings file so Gradle treats this as a project
         touch settings.gradle
-        
-        # Generate the Gradle 8.2 wrapper (Safe & Clean)
         gradle wrapper --gradle-version 8.2
         chmod +x gradlew
         
@@ -26,12 +23,19 @@ jobs:
         # STEP 2: GENERATE REAL PROJECT FILES
         # ---------------------------------------------------------
         
-        # 1. Directory Structure
+        # 1. Directory Structure & Move Kotlin Files
         mkdir -p app/src/main/java/com/iptv/player
         mkdir -p app/src/main/res/{layout,values,drawable}
         mv *.kt app/src/main/java/com/iptv/player/ || true
 
-        # 2. ROOT build.gradle
+        # 2. GRADLE.PROPERTIES (This was missing and caused the error!)
+        cat <<EOF > gradle.properties
+        android.useAndroidX=true
+        android.enableJetifier=true
+        org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+        EOF
+
+        # 3. ROOT build.gradle
         cat <<EOF > build.gradle
         buildscript {
             repositories {
@@ -54,12 +58,12 @@ jobs:
         }
         EOF
 
-        # 3. settings.gradle (Overwriting the empty one)
+        # 4. settings.gradle
         cat <<EOF > settings.gradle
         include ':app'
         EOF
 
-        # 4. app/build.gradle
+        # 5. app/build.gradle
         cat <<EOF > app/build.gradle
         plugins {
             id 'com.android.application'
@@ -97,7 +101,7 @@ jobs:
         }
         EOF
 
-        # 5. AndroidManifest.xml
+        # 6. AndroidManifest.xml
         cat <<EOF > app/src/main/AndroidManifest.xml
         <?xml version="1.0" encoding="utf-8"?>
         <manifest xmlns:android="http://schemas.android.com/apk/res/android">
@@ -115,7 +119,7 @@ jobs:
         </manifest>
         EOF
 
-        # 6. UI Resources
+        # 7. UI Resources
         cat <<EOF > app/src/main/res/values/colors.xml
         <?xml version="1.0" encoding="utf-8"?>
         <resources>
