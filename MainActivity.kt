@@ -18,7 +18,10 @@ import androidx.drawerlayout.widget.DrawerLayout
 import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaItem.DrmConfiguration
+import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -50,8 +53,8 @@ class MainActivity : AppCompatActivity() {
             setContentView(R.layout.activity_main)
             repo = Repository(this)
             
-            player = ExoPlayer.Builder(this).build()
-            findViewById<PlayerView>(R.id.playerView)?.player = player
+            // --- FIXED PLAYER SETUP ---
+            initializePlayer()
 
             drawerLayout = findViewById(R.id.drawerLayout)
             epgContainer = findViewById(R.id.epgContainer)
@@ -71,6 +74,25 @@ class MainActivity : AppCompatActivity() {
             e.printStackTrace()
             showError("Init Error", "${e.message}")
         }
+    }
+
+    private fun initializePlayer() {
+        // 1. Configure HTTP Client to allow HTTPS -> HTTP redirects
+        val httpDataSourceFactory = DefaultHttpDataSource.Factory()
+            .setUserAgent("TiviMate/4.7.0") // Spoof User-Agent to bypass blocks
+            .setAllowCrossProtocolRedirects(true) // FIX: Allow HTTPS to HTTP redirect
+            .setConnectTimeoutMs(8000)
+            .setReadTimeoutMs(8000)
+
+        // 2. Wrap it in a DefaultDataSource
+        val dataSourceFactory = DefaultDataSource.Factory(this, httpDataSourceFactory)
+
+        // 3. Create Player with this Factory
+        player = ExoPlayer.Builder(this)
+            .setMediaSourceFactory(DefaultMediaSourceFactory(this).setDataSourceFactory(dataSourceFactory))
+            .build()
+            
+        findViewById<PlayerView>(R.id.playerView)?.player = player
     }
 
     private fun showError(title: String, msg: String) {
@@ -181,10 +203,16 @@ class MainActivity : AppCompatActivity() {
         try {
             repo.addRecent(c)
             val builder = MediaItem.Builder().setUri(c.url)
-            if (c.drmLicense != null) builder.setDrmConfiguration(DrmConfiguration.Builder(androidx.media3.common.C.WIDEVINE_UUID).setLicenseUri(c.drmLicense).build())
-            player?.setMediaItem(builder.build()); player?.prepare(); player?.play()
+            if (c.drmLicense != null) {
+                builder.setDrmConfiguration(DrmConfiguration.Builder(androidx.media3.common.C.WIDEVINE_UUID).setLicenseUri(c.drmLicense).build())
+            }
+            player?.setMediaItem(builder.build())
+            player?.prepare()
+            player?.play()
             epgContainer?.visibility = View.GONE
-        } catch (e: Exception) {}
+        } catch (e: Exception) {
+            Toast.makeText(this, "Playback Error: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun setupSearchUI() {
@@ -207,7 +235,7 @@ class MainActivity : AppCompatActivity() {
         val results = allChannelsFlat.filter { it.name.contains(query, ignoreCase = true) }
         tvSearchCount?.text = "${results.size} Results"
         
-        // FIXED LINE BELOW: Added 'c ->' to the 3rd parameter
+        // FIXED: c -> logic
         rvSearchResults?.adapter = ChannelAdapter(
             results, 
             { c -> play(c); closeSearch() }, 
