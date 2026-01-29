@@ -10,12 +10,11 @@ import android.widget.TextView
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 
-// --- GROUP ADAPTER ---
-// Added 'onFocusRight' parameter to handle navigation safely
+// --- GROUP ADAPTER (Fixed Navigation Logic) ---
 class GroupAdapter(
     private val groups: List<String>, 
     private val onSelect: (String)->Unit,
-    private val onFocusRight: ()->Unit  // <--- NEW: Callback for navigation
+    private val onFocusRight: ()->Unit // Callback for navigation
 ) : RecyclerView.Adapter<GroupAdapter.VH>() {
     
     var selectedPos = 0
@@ -36,22 +35,30 @@ class GroupAdapter(
         val tv = h.itemView as TextView
         tv.text = groups[pos]
         
+        // Efficient Highlighting
         if (selectedPos == pos) {
-            tv.setBackgroundColor(Color.parseColor("#00BCD4"))
+            tv.setBackgroundColor(Color.parseColor("#00BCD4")) // Cyan
+            tv.setTextColor(Color.WHITE)
         } else {
             tv.setBackgroundColor(Color.TRANSPARENT)
+            tv.setTextColor(Color.LTGRAY)
         }
         
-        val select = { 
-            selectedPos = pos
-            onSelect(groups[pos])
-            notifyDataSetChanged() 
+        // Logic to update selection without resetting focus
+        val performSelect = {
+            if (selectedPos != pos) {
+                val oldPos = selectedPos
+                selectedPos = pos
+                notifyItemChanged(oldPos) // Un-highlight old
+                notifyItemChanged(selectedPos) // Highlight new
+                onSelect(groups[pos]) 
+            }
         }
         
-        tv.setOnClickListener { select() }
-        tv.setOnFocusChangeListener { _, hasFocus -> if(hasFocus) select() }
+        tv.setOnClickListener { performSelect() }
+        tv.setOnFocusChangeListener { _, hasFocus -> if(hasFocus) performSelect() }
         
-        // SAFE NAVIGATION: Calls the callback instead of casting MainActivity
+        // Navigation Handler (Calls the callback)
         tv.setOnKeyListener { _, k, e -> 
             if(e.action == KeyEvent.ACTION_DOWN && k == KeyEvent.KEYCODE_DPAD_RIGHT) {
                 onFocusRight() 
@@ -67,17 +74,18 @@ class GroupAdapter(
 }
 
 // --- CHANNEL ADAPTER ---
-// Added 'onFocusLeft' parameter to handle navigation safely
 class ChannelAdapter(
     private var list: List<Channel>, 
     private val onPlay: (Channel)->Unit, 
     private val onFav: (Channel)->Unit,
-    private val onFocusLeft: ()->Unit // <--- NEW: Callback for navigation
+    private val onFocusLeft: ()->Unit // Callback for navigation
 ) : RecyclerView.Adapter<ChannelAdapter.VH>() {
     
-    fun update(n: List<Channel>) { 
+    // Updates list and resets scroll to top
+    fun update(n: List<Channel>, rv: RecyclerView?) { 
         list = n
-        notifyDataSetChanged() 
+        notifyDataSetChanged()
+        rv?.scrollToPosition(0)
     }
     
     override fun onCreateViewHolder(p: ViewGroup, t: Int): VH {
@@ -90,22 +98,15 @@ class ChannelAdapter(
         h.num.text = c.number.toString()
         h.name.text = c.name
         
-        if (c.isFavorite) {
-            h.fav.visibility = View.VISIBLE
-        } else {
-            h.fav.visibility = View.GONE
-        }
+        if (c.isFavorite) h.fav.visibility = View.VISIBLE else h.fav.visibility = View.GONE
         
         h.rvProg.layoutManager = LinearLayoutManager(h.itemView.context, LinearLayoutManager.HORIZONTAL, false)
         h.rvProg.adapter = ProgramAdapter(c.programs)
 
         h.header.setOnClickListener { onPlay(c) }
-        h.header.setOnLongClickListener { 
-            onFav(c)
-            true 
-        }
+        h.header.setOnLongClickListener { onFav(c); true }
 
-        // SAFE NAVIGATION: Calls the callback instead of casting MainActivity
+        // Navigation Handler
         h.header.setOnKeyListener { _, k, e ->
             if(e.action == KeyEvent.ACTION_DOWN && k == KeyEvent.KEYCODE_DPAD_LEFT) {
                 onFocusLeft()
@@ -133,14 +134,11 @@ class ProgramAdapter(private val l: List<Program>) : RecyclerView.Adapter<Progra
         val v = LayoutInflater.from(p.context).inflate(R.layout.item_program, p, false)
         return VH(v)
     }
-    
     override fun onBindViewHolder(h: VH, i: Int) { 
         h.t.text = l[i].title
         h.tm.text = l[i].time 
     }
-    
     override fun getItemCount() = l.size
-    
     class VH(v: View) : RecyclerView.ViewHolder(v) { 
         val t: TextView = v.findViewById(R.id.tvTitle)
         val tm: TextView = v.findViewById(R.id.tvTime) 
