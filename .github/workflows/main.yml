@@ -1,4 +1,4 @@
-name: Build TiviMate Pro Final
+name: Build TiviMate Pro Final Fixed
 
 on: [push, workflow_dispatch]
 
@@ -10,26 +10,20 @@ jobs:
     - uses: actions/setup-java@v3
       with: { java-version: '17', distribution: 'temurin' }
 
-    - name: Initialize Gradle Wrapper (Clean)
+    - name: Setup & Build
       run: |
-        # 1. Generate Wrapper BEFORE creating build files
-        # This prevents Gradle 9.3 from failing on our config
-        mkdir -p app
-        gradle wrapper --gradle-version 8.2
-        chmod +x gradlew
-
-    - name: Generate Project Files
-      run: |
-        # 1. Create Directory Structure
+        # ---------------------------------------------------------
+        # 1. SETUP DIRECTORY & FILES
+        # ---------------------------------------------------------
         mkdir -p app/src/main/java/com/iptv/player
         mkdir -p app/src/main/res/{layout,values,drawable}
         
-        # 2. Move Kotlin Files
+        # Move Kotlin files (Fail silently if missing to prevent crash, assuming they are there)
         mv *.kt app/src/main/java/com/iptv/player/ || true
 
-        # ==========================================
-        # 3. GENERATE ROOT build.gradle
-        # ==========================================
+        # ---------------------------------------------------------
+        # 2. GENERATE ROOT build.gradle (CRITICAL)
+        # ---------------------------------------------------------
         cat <<EOF > build.gradle
         buildscript {
             repositories {
@@ -52,16 +46,16 @@ jobs:
         }
         EOF
 
-        # ==========================================
-        # 4. GENERATE settings.gradle
-        # ==========================================
+        # ---------------------------------------------------------
+        # 3. GENERATE settings.gradle (CRITICAL)
+        # ---------------------------------------------------------
         cat <<EOF > settings.gradle
         include ':app'
         EOF
 
-        # ==========================================
-        # 5. GENERATE app/build.gradle
-        # ==========================================
+        # ---------------------------------------------------------
+        # 4. GENERATE app/build.gradle
+        # ---------------------------------------------------------
         cat <<EOF > app/build.gradle
         plugins {
             id 'com.android.application'
@@ -108,15 +102,14 @@ jobs:
         }
         EOF
 
-        # ==========================================
-        # 6. GENERATE AndroidManifest.xml
-        # ==========================================
+        # ---------------------------------------------------------
+        # 5. GENERATE AndroidManifest.xml
+        # ---------------------------------------------------------
         cat <<EOF > app/src/main/AndroidManifest.xml
         <?xml version="1.0" encoding="utf-8"?>
         <manifest xmlns:android="http://schemas.android.com/apk/res/android">
             <uses-permission android:name="android.permission.INTERNET" />
             <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
-            
             <uses-feature android:name="android.software.leanback" android:required="false" />
             <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
 
@@ -138,9 +131,11 @@ jobs:
         </manifest>
         EOF
 
-        # ==========================================
-        # 7. GENERATE COLORS
-        # ==========================================
+        # ---------------------------------------------------------
+        # 6. GENERATE RESOURCES (Colors, Drawables, Layouts)
+        # ---------------------------------------------------------
+        
+        # Colors
         cat <<EOF > app/src/main/res/values/colors.xml
         <?xml version="1.0" encoding="utf-8"?>
         <resources>
@@ -154,41 +149,26 @@ jobs:
         </resources>
         EOF
 
-        # ==========================================
-        # 8. GENERATE DRAWABLE
-        # ==========================================
+        # Drawable
         cat <<EOF > app/src/main/res/drawable/selector_item.xml
         <?xml version="1.0" encoding="utf-8"?>
         <selector xmlns:android="http://schemas.android.com/apk/res/android">
             <item android:state_focused="true">
-                <shape>
-                    <solid android:color="@color/bg_focus"/>
-                    <stroke android:width="2dp" android:color="@color/highlight"/>
-                    <corners android:radius="4dp"/>
-                </shape>
+                <shape><solid android:color="@color/bg_focus"/><stroke android:width="2dp" android:color="@color/highlight"/><corners android:radius="4dp"/></shape>
             </item>
-            <item>
-                <shape>
-                    <solid android:color="@android:color/transparent"/>
-                    <corners android:radius="4dp"/>
-                </shape>
-            </item>
+            <item><shape><solid android:color="@android:color/transparent"/><corners android:radius="4dp"/></shape></item>
         </selector>
         EOF
 
-        # ==========================================
-        # 9. GENERATE LAYOUT: activity_main.xml
-        # ==========================================
+        # Layout: activity_main.xml
         cat <<EOF > app/src/main/res/layout/activity_main.xml
         <?xml version="1.0" encoding="utf-8"?>
         <androidx.drawerlayout.widget.DrawerLayout xmlns:android="http://schemas.android.com/apk/res/android"
             android:id="@+id/drawerLayout" android:layout_width="match_parent" android:layout_height="match_parent">
-
             <FrameLayout android:layout_width="match_parent" android:layout_height="match_parent" android:background="@color/bg_video">
                 <androidx.media3.ui.PlayerView android:id="@+id/playerView"
                     android:layout_width="match_parent" android:layout_height="match_parent"
                     android:focusable="false" xmlns:app="http://schemas.android.com/apk/res-auto" app:use_controller="false" />
-
                 <LinearLayout android:id="@+id/epgContainer"
                     android:layout_width="match_parent" android:layout_height="match_parent"
                     android:orientation="horizontal" android:background="@color/bg_overlay" android:visibility="gone" android:weightSum="10">
@@ -201,7 +181,6 @@ jobs:
                         android:paddingStart="4dp" android:paddingTop="8dp"
                         android:descendantFocusability="afterDescendants"/>
                 </LinearLayout>
-
                 <LinearLayout android:id="@+id/recentContainer"
                     android:layout_width="match_parent" android:layout_height="120dp"
                     android:layout_gravity="bottom" android:background="#CC000000"
@@ -210,14 +189,12 @@ jobs:
                     <androidx.recyclerview.widget.RecyclerView android:id="@+id/rvRecents"
                         android:layout_width="match_parent" android:layout_height="match_parent"/>
                 </LinearLayout>
-
                 <TextView android:id="@+id/tvOverlayNum"
                     android:layout_width="wrap_content" android:layout_height="wrap_content"
                     android:layout_gravity="top|end" android:layout_margin="30dp"
                     android:textSize="48sp" android:textColor="@color/text_primary"
                     android:textStyle="bold" android:visibility="gone"
                     android:background="#80000000" android:padding="10dp"/>
-
                 <LinearLayout android:id="@+id/searchContainer"
                     android:layout_width="match_parent" android:layout_height="match_parent"
                     android:orientation="vertical" android:background="#F2121212"
@@ -233,7 +210,6 @@ jobs:
                     <androidx.recyclerview.widget.RecyclerView android:id="@+id/rvSearchResults" android:layout_width="match_parent" android:layout_height="match_parent" android:layout_marginTop="10dp"/>
                 </LinearLayout>
             </FrameLayout>
-
             <LinearLayout android:id="@+id/settingsDrawer"
                 android:layout_width="300dp" android:layout_height="match_parent"
                 android:layout_gravity="end" android:background="@color/bg_panel"
@@ -241,9 +217,7 @@ jobs:
         </androidx.drawerlayout.widget.DrawerLayout>
         EOF
 
-        # ==========================================
-        # 10. GENERATE LAYOUT: item_channel.xml
-        # ==========================================
+        # Layout: item_channel.xml
         cat <<EOF > app/src/main/res/layout/item_channel.xml
         <?xml version="1.0" encoding="utf-8"?>
         <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
@@ -263,9 +237,7 @@ jobs:
         </LinearLayout>
         EOF
 
-        # ==========================================
-        # 11. GENERATE LAYOUT: item_program.xml
-        # ==========================================
+        # Layout: item_program.xml
         cat <<EOF > app/src/main/res/layout/item_program.xml
         <?xml version="1.0" encoding="utf-8"?>
         <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
@@ -277,9 +249,15 @@ jobs:
         </LinearLayout>
         EOF
 
-    - name: Build APK
-      run: |
-        # Use the wrapper we generated in Step 1
+        # ---------------------------------------------------------
+        # 7. GENERATE WRAPPER & BUILD (Sequence is Vital)
+        # ---------------------------------------------------------
+        # Now that build.gradle exists, we can safely generate the wrapper
+        gradle wrapper --gradle-version 8.2
+        
+        chmod +x gradlew
+        
+        # Now we build
         ./gradlew assembleDebug
 
     - uses: actions/upload-artifact@v4
