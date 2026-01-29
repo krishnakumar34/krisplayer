@@ -85,7 +85,6 @@ class MainActivity : AppCompatActivity() {
                 allData = M3uParser.parse(this@MainActivity, p, repo.getFavIds())
                 allChannelsFlat = allData.values.flatten().distinctBy { it.id }
                 
-                // 1. Setup Group Adapter (Passes 'focusChannelList' callback)
                 rvGroups?.adapter = GroupAdapter(allData.keys.toList(), { group ->
                     val channels = allData[group] ?: emptyList()
                     (rvChannels?.adapter as? ChannelAdapter)?.update(channels, rvChannels)
@@ -97,7 +96,6 @@ class MainActivity : AppCompatActivity() {
                     val firstGroup = allData.keys.first()
                     val firstChannels = allData[firstGroup] ?: emptyList()
                     
-                    // 2. Setup Channel Adapter (Passes 'focusGroupList' callback)
                     rvChannels?.adapter = ChannelAdapter(
                         firstChannels, 
                         { play(it) }, 
@@ -105,7 +103,6 @@ class MainActivity : AppCompatActivity() {
                         { focusGroupList() }
                     )
                     
-                    // 3. Auto-Show Menu
                     epgContainer?.visibility = View.VISIBLE
                     rvGroups?.requestFocus()
                 } else {
@@ -210,20 +207,23 @@ class MainActivity : AppCompatActivity() {
         val results = allChannelsFlat.filter { it.name.contains(query, ignoreCase = true) }
         tvSearchCount?.text = "${results.size} Results"
         
-        // Pass empty lambda for 4th param since Search doesn't need left-nav
-        rvSearchResults?.adapter = ChannelAdapter(results, { c -> play(c); closeSearch() }, { toggleFav(c) }, {})
+        // FIXED LINE BELOW: Added 'c ->' to the 3rd parameter
+        rvSearchResults?.adapter = ChannelAdapter(
+            results, 
+            { c -> play(c); closeSearch() }, 
+            { c -> toggleFav(c) }, 
+            {} 
+        )
     }
 
     private fun openSearch() { searchContainer?.visibility = View.VISIBLE; epgContainer?.visibility = View.GONE; etSearch?.requestFocus(); showKeyboard() }
     private fun closeSearch() { searchContainer?.visibility = View.GONE; etSearch?.text?.clear(); hideKeyboard() }
     
     private fun showKeyboard() {
-        // Explicit Context usage
         val imm = getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
         etSearch?.let { imm.showSoftInput(it, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT) }
     }
     private fun hideKeyboard() {
-        // Explicit Context usage
         val imm = getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
         etSearch?.let { imm.hideSoftInputFromWindow(it.windowToken, 0) }
     }
