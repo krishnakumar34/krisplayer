@@ -271,8 +271,9 @@ jobs:
 
     - name: Build APK
       run: |
-        # Initialize Gradle Wrapper to prevent "No such file" error
-        gradle wrapper
+        # Force Gradle 8.2 to match AGP 8.2.0 (Prevents API errors with Gradle 9.0)
+        gradle wrapper --gradle-version 8.2
+        
         chmod +x gradlew
         ./gradlew assembleDebug
 
