@@ -1,4 +1,4 @@
-name: Build TiviMate Pro Bootstrap
+name: Build TiviMate Pro Fixed
 
 on: [push, workflow_dispatch]
 
@@ -10,26 +10,20 @@ jobs:
     - uses: actions/setup-java@v3
       with: { java-version: '17', distribution: 'temurin' }
 
-    - name: Bootstrap & Build
+    - name: Build APK
       run: |
         # ---------------------------------------------------------
-        # STEP 1: BOOTSTRAP GRADLE WRAPPER
-        # We create a dummy build file first so "gradle wrapper" 
-        # doesn't crash on the complex Android config.
+        # STEP 1: SAFE WRAPPER GENERATION
         # ---------------------------------------------------------
-        mkdir -p app
-        echo "task wrapper(type: Wrapper) { gradleVersion = '8.2' }" > build.gradle
+        # Create an empty settings file so Gradle treats this as a project
+        touch settings.gradle
         
-        # Generate the wrapper safely using the global Gradle
+        # Generate the Gradle 8.2 wrapper (Safe & Clean)
         gradle wrapper --gradle-version 8.2
         chmod +x gradlew
         
-        # Verify it works (should output Gradle 8.2)
-        ./gradlew -v
-
         # ---------------------------------------------------------
         # STEP 2: GENERATE REAL PROJECT FILES
-        # Now we overwrite the dummy files with the real code.
         # ---------------------------------------------------------
         
         # 1. Directory Structure
@@ -37,7 +31,7 @@ jobs:
         mkdir -p app/src/main/res/{layout,values,drawable}
         mv *.kt app/src/main/java/com/iptv/player/ || true
 
-        # 2. REAL build.gradle (Overwrites dummy)
+        # 2. ROOT build.gradle
         cat <<EOF > build.gradle
         buildscript {
             repositories {
@@ -60,7 +54,7 @@ jobs:
         }
         EOF
 
-        # 3. settings.gradle
+        # 3. settings.gradle (Overwriting the empty one)
         cat <<EOF > settings.gradle
         include ':app'
         EOF
@@ -121,7 +115,7 @@ jobs:
         </manifest>
         EOF
 
-        # 6. UI Resources (Colors, Drawables, Layouts)
+        # 6. UI Resources
         cat <<EOF > app/src/main/res/values/colors.xml
         <?xml version="1.0" encoding="utf-8"?>
         <resources>
@@ -232,7 +226,7 @@ jobs:
         EOF
 
         # ---------------------------------------------------------
-        # STEP 3: RUN THE BUILD (Using the Safe 8.2 Wrapper)
+        # STEP 3: RUN THE BUILD
         # ---------------------------------------------------------
         ./gradlew assembleDebug
 
