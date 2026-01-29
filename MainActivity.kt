@@ -2,9 +2,12 @@ package com.iptv.player
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.Context
 import android.content.Intent
 import android.os.Bundle; android.os.Handler; android.os.Looper
-import android.view.*; android.widget.*
+import android.text.Editable; android.text.TextWatcher
+import android.view.*; android.view.inputmethod.EditorInfo; android.view.inputmethod.InputMethodManager
+import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.drawerlayout.widget.DrawerLayout
 import androidx.lifecycle.lifecycleScope
@@ -18,12 +21,23 @@ import kotlinx.coroutines.launch
 import java.util.UUID
 
 class MainActivity : AppCompatActivity() {
+    // Core
     private lateinit var player: ExoPlayer
     private lateinit var drawerLayout: DrawerLayout
     private lateinit var epgContainer: LinearLayout
-    private lateinit var rvGroups: RecyclerView; private lateinit var rvChannels: RecyclerView
     private lateinit var repo: Repository
     
+    // UI Lists
+    private lateinit var rvGroups: RecyclerView
+    private lateinit var rvChannels: RecyclerView
+    
+    // Search UI
+    private lateinit var searchContainer: LinearLayout
+    private lateinit var etSearch: EditText
+    private lateinit var rvSearchResults: RecyclerView
+    private lateinit var tvSearchCount: TextView
+    
+    // Data
     private var allData = mapOf<String, List<Channel>>()
     private var allChannelsFlat = listOf<Channel>()
     private var numBuffer = ""; private val handler = Handler(Looper.getMainLooper())
@@ -42,12 +56,40 @@ class MainActivity : AppCompatActivity() {
         rvGroups = findViewById(R.id.rvGroups); rvGroups.layoutManager = LinearLayoutManager(this)
         rvChannels = findViewById(R.id.rvChannels); rvChannels.layoutManager = LinearLayoutManager(this)
 
+        setupSearchUI()
         updateSettingsDrawer()
 
         val active = repo.getActivePlaylist()
         if (active != null) loadData(active) else showWelcomeDialog()
     }
 
+    // --- SEARCH FEATURE ---
+    private fun setupSearchUI() {
+        searchContainer = findViewById(R.id.searchContainer)
+        etSearch = findViewById(R.id.etSearch)
+        rvSearchResults = findViewById(R.id.rvSearchResults)
+        tvSearchCount = findViewById(R.id.tvSearchResultsCount)
+        findViewById<Button>(R.id.btnCloseSearch).setOnClickListener { closeSearch() }
+
+        rvSearchResults.layoutManager = LinearLayoutManager(this)
+        etSearch.addTextChangedListener(object : TextWatcher {
+            override fun afterTextChanged(s: Editable?) { performSearch(s.toString()) }
+            override fun beforeTextChanged(s: CharSequence?, st: Int, c: Int, a: Int) {}
+            override fun onTextChanged(s: CharSequence?, st: Int, b: Int, c: Int) {}
+        })
+    }
+
+    private fun performSearch(query: String) {
+        if (query.isEmpty()) { rvSearchResults.adapter = null; tvSearchCount.text="0 Results"; return }
+        val results = allChannelsFlat.filter { it.name.contains(query, ignoreCase = true) }
+        tvSearchCount.text = "${results.size} Results"
+        rvSearchResults.adapter = ChannelAdapter(results, { c -> play(c); closeSearch() }, { toggleFav(c) })
+    }
+
+    private fun openSearch() { searchContainer.visibility = View.VISIBLE; epgContainer.visibility=View.GONE; etSearch.requestFocus() }
+    private fun closeSearch() { searchContainer.visibility = View.GONE; etSearch.text.clear() }
+
+    // --- DATA LOADING ---
     private fun loadData(p: Playlist) {
         lifecycleScope.launch {
             Toast.makeText(this@MainActivity, "Loading...", Toast.LENGTH_SHORT).show()
@@ -58,37 +100,27 @@ class MainActivity : AppCompatActivity() {
                 (rvChannels.adapter as? ChannelAdapter)?.update(allData[group] ?: emptyList())
             }
             if (allData.isNotEmpty()) {
-                val firstGroup = allData.keys.first()
-                rvChannels.adapter = ChannelAdapter(allData[firstGroup] ?: emptyList(), { play(it) }, { toggleFav(it) })
+                val first = allData.keys.first()
+                rvChannels.adapter = ChannelAdapter(allData[first] ?: emptyList(), { play(it) }, { toggleFav(it) })
             }
         }
     }
 
-    // --- PLAYBACK ENGINE ---
+    // --- PLAYBACK ---
     private fun play(c: Channel) {
-        // PREVIEW MODE: We load the stream but DO NOT hide the menu immediately.
-        // User must click "Back" to go fullscreen if they want.
-        
+        repo.addRecent(c)
         val builder = MediaItem.Builder().setUri(c.url)
         if (c.drmLicense != null) {
             builder.setDrmConfiguration(DrmConfiguration.Builder(androidx.media3.common.C.WIDEVINE_UUID).setLicenseUri(c.drmLicense).build())
         }
-        
-        // Apply User-Agent Header if present
-        // (Note: To apply headers fully in ExoPlayer requires a custom DataSourceFactory, 
-        //  but the parsing logic is ready in the Model)
-        
-        player.setMediaItem(builder.build())
-        player.prepare()
-        player.play()
-        
-        // HIDE MENU instantly (As per your previous request to switch channel logic)
+        player.setMediaItem(builder.build()); player.prepare(); player.play()
         epgContainer.visibility = View.GONE
     }
 
     private fun toggleFav(c: Channel) {
         repo.toggleFav(c.id); c.isFavorite = !c.isFavorite
         (rvChannels.adapter as? ChannelAdapter)?.notifyDataSetChanged()
+        (rvSearchResults.adapter as? ChannelAdapter)?.notifyDataSetChanged()
     }
 
     // --- SETTINGS ---
@@ -98,15 +130,17 @@ class MainActivity : AppCompatActivity() {
         fun btn(t: String, a: ()->Unit) = root.addView(Button(this).apply { text=t; setOnClickListener { a() } })
         
         root.addView(TextView(this).apply { text="Settings"; textSize=24f; setTextColor(-1) })
-        btn("Add URL Playlist") { showAddUrlDialog() }
-        btn("Add Local M3U") { openFilePicker() }
+        btn("Search") { openSearch(); drawerLayout.closeDrawers() }
+        btn("Add URL") { showAddUrlDialog() }
+        btn("Add Local") { openFilePicker() }
         
-        root.addView(TextView(this).apply { text="My Playlists"; textSize=18f; setTextColor(-1); setPadding(0,40,0,10) })
+        root.addView(TextView(this).apply { text="Playlists"; textSize=18f; setTextColor(-1); setPadding(0,40,0,10) })
         repo.getPlaylists().forEach { p ->
             btn(p.name) { repo.setActivePlaylist(p.id); loadData(p); drawerLayout.closeDrawers() }
         }
     }
 
+    // --- DIALOGS ---
     private fun showAddUrlDialog() {
         val input = EditText(this).apply { hint = "http://..." }
         AlertDialog.Builder(this).setTitle("Add URL").setView(input).setPositiveButton("OK") {_,_->
@@ -116,36 +150,32 @@ class MainActivity : AppCompatActivity() {
             }
         }.show()
     }
-
     private fun openFilePicker() {
-        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply { addCategory(Intent.CATEGORY_OPENABLE); type = "*/*" }
-        startActivityForResult(intent, PICK_FILE)
+        startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply { addCategory(Intent.CATEGORY_OPENABLE); type="*/*" }, PICK_FILE)
     }
-
     override fun onActivityResult(req: Int, res: Int, data: Intent?) {
         super.onActivityResult(req, res, data)
         if (req == PICK_FILE && res == Activity.RESULT_OK) {
-            data?.data?.let { uri ->
-                contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                val p = Playlist(name="Local Playlist", source=uri.toString(), type=PlaylistType.LOCAL)
+            data?.data?.let { 
+                contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                val p = Playlist(name="Local Playlist", source=it.toString(), type=PlaylistType.LOCAL)
                 repo.savePlaylist(p); updateSettingsDrawer(); loadData(p)
             }
         }
     }
-
     private fun showWelcomeDialog() {
-        AlertDialog.Builder(this).setTitle("Welcome").setMessage("Add a playlist.")
-            .setPositiveButton("Add URL") {_,_-> showAddUrlDialog()}
-            .setNegativeButton("Local File") {_,_-> openFilePicker()}.show()
+        AlertDialog.Builder(this).setTitle("Welcome").setMessage("Add Playlist").setPositiveButton("URL") {_,_-> showAddUrlDialog()}.show()
     }
 
     // --- HELPERS ---
     fun focusGroupList() = rvGroups.requestFocus()
     fun focusChannelList() = rvChannels.requestFocus()
 
-    // --- REMOTE CONTROL LOGIC ---
+    // --- REMOTE INPUT ---
     override fun onKeyDown(k: Int, e: KeyEvent?): Boolean {
-        // 1. NUMBER INPUT
+        if (k == KeyEvent.KEYCODE_SEARCH) { openSearch(); return true }
+        
+        // Numbers
         if (k in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9) {
             numBuffer += (k - KeyEvent.KEYCODE_0)
             val tv = findViewById<TextView>(R.id.tvOverlayNum)
@@ -157,22 +187,21 @@ class MainActivity : AppCompatActivity() {
             }, 3000)
             return true
         }
-        
-        // 2. MENU VISIBILITY
-        if (epgContainer.visibility == View.GONE) {
+
+        // Navigation
+        if (epgContainer.visibility == View.GONE && searchContainer.visibility == View.GONE) {
             when(k) {
                 KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_MENU -> {
                     epgContainer.visibility = View.VISIBLE; focusGroupList(); return true
                 }
-                KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                    drawerLayout.openDrawer(Gravity.END); return true
-                }
+                KeyEvent.KEYCODE_DPAD_RIGHT -> { drawerLayout.openDrawer(Gravity.END); return true }
+                KeyEvent.KEYCODE_DPAD_DOWN -> { findViewById<View>(R.id.recentContainer).visibility=View.VISIBLE; return true }
             }
         } else if (k == KeyEvent.KEYCODE_BACK) {
-            epgContainer.visibility = View.GONE; return true
+            if(searchContainer.visibility==View.VISIBLE) closeSearch() else epgContainer.visibility=View.GONE
+            return true
         }
         return super.onKeyDown(k, e)
     }
-
     override fun onDestroy() { super.onDestroy(); player.release() }
 }
