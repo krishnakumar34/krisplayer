@@ -1,4 +1,4 @@
-name: Build TiviMate Pro Fixed V4
+name: Build TiviMate Pro Fixed V5
 
 on: [push, workflow_dispatch]
 
@@ -25,7 +25,7 @@ jobs:
         
         # 1. Directory Structure & Move Kotlin Files
         mkdir -p app/src/main/java/com/iptv/player
-        mkdir -p app/src/main/res/{layout,values,drawable}
+        mkdir -p app/src/main/res/{layout,values,drawable,xml}  # Added 'xml' folder
         mv *.kt app/src/main/java/com/iptv/player/ || true
 
         # 2. GRADLE.PROPERTIES
@@ -101,7 +101,19 @@ jobs:
         }
         EOF
 
-        # 6. AndroidManifest.xml (UPDATED WITH HTTP FIX)
+        # 6. NETWORK SECURITY CONFIG (NEW: Forces HTTP Support)
+        cat <<EOF > app/src/main/res/xml/network_security_config.xml
+        <?xml version="1.0" encoding="utf-8"?>
+        <network-security-config>
+            <base-config cleartextTrafficPermitted="true">
+                <trust-anchors>
+                    <certificates src="system" />
+                </trust-anchors>
+            </base-config>
+        </network-security-config>
+        EOF
+
+        # 7. AndroidManifest.xml (UPDATED)
         cat <<EOF > app/src/main/AndroidManifest.xml
         <?xml version="1.0" encoding="utf-8"?>
         <manifest xmlns:android="http://schemas.android.com/apk/res/android">
@@ -113,8 +125,9 @@ jobs:
             <application
                 android:allowBackup="true"
                 android:label="TiviClone Pro"
-                android:usesCleartextTraffic="true"
+                android:networkSecurityConfig="@xml/network_security_config"
                 android:requestLegacyExternalStorage="true"
+                android:usesCleartextTraffic="true"
                 android:theme="@style/Theme.AppCompat.NoActionBar">
                 
                 <activity android:name=".MainActivity" android:exported="true"
@@ -126,7 +139,7 @@ jobs:
         </manifest>
         EOF
 
-        # 7. UI Resources (Colors)
+        # 8. UI Resources (Colors)
         cat <<EOF > app/src/main/res/values/colors.xml
         <?xml version="1.0" encoding="utf-8"?>
         <resources>
@@ -140,7 +153,7 @@ jobs:
         </resources>
         EOF
 
-        # 8. UI Resources (Drawable)
+        # 9. UI Resources (Drawable)
         cat <<EOF > app/src/main/res/drawable/selector_item.xml
         <?xml version="1.0" encoding="utf-8"?>
         <selector xmlns:android="http://schemas.android.com/apk/res/android">
@@ -151,7 +164,7 @@ jobs:
         </selector>
         EOF
 
-        # 9. UI Resources (Layout)
+        # 10. UI Resources (Layout)
         cat <<EOF > app/src/main/res/layout/activity_main.xml
         <?xml version="1.0" encoding="utf-8"?>
         <androidx.drawerlayout.widget.DrawerLayout xmlns:android="http://schemas.android.com/apk/res/android"
@@ -217,7 +230,7 @@ jobs:
         </androidx.drawerlayout.widget.DrawerLayout>
         EOF
 
-        # 10. Channel Layout
+        # 11. Channel Layout
         cat <<EOF > app/src/main/res/layout/item_channel.xml
         <?xml version="1.0" encoding="utf-8"?>
         <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
@@ -237,7 +250,7 @@ jobs:
         </LinearLayout>
         EOF
 
-        # 11. Program Layout
+        # 12. Program Layout
         cat <<EOF > app/src/main/res/layout/item_program.xml
         <?xml version="1.0" encoding="utf-8"?>
         <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
