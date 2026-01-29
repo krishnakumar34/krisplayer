@@ -11,7 +11,13 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 
 // --- GROUP ADAPTER ---
-class GroupAdapter(private val groups: List<String>, private val onSelect: (String)->Unit) : RecyclerView.Adapter<GroupAdapter.VH>() {
+// Added 'onFocusRight' parameter to handle navigation safely
+class GroupAdapter(
+    private val groups: List<String>, 
+    private val onSelect: (String)->Unit,
+    private val onFocusRight: ()->Unit  // <--- NEW: Callback for navigation
+) : RecyclerView.Adapter<GroupAdapter.VH>() {
+    
     var selectedPos = 0
     
     override fun onCreateViewHolder(p: ViewGroup, t: Int): VH {
@@ -29,6 +35,7 @@ class GroupAdapter(private val groups: List<String>, private val onSelect: (Stri
     override fun onBindViewHolder(h: VH, pos: Int) {
         val tv = h.itemView as TextView
         tv.text = groups[pos]
+        
         if (selectedPos == pos) {
             tv.setBackgroundColor(Color.parseColor("#00BCD4"))
         } else {
@@ -44,9 +51,10 @@ class GroupAdapter(private val groups: List<String>, private val onSelect: (Stri
         tv.setOnClickListener { select() }
         tv.setOnFocusChangeListener { _, hasFocus -> if(hasFocus) select() }
         
-        tv.setOnKeyListener { v, k, e -> 
+        // SAFE NAVIGATION: Calls the callback instead of casting MainActivity
+        tv.setOnKeyListener { _, k, e -> 
             if(e.action == KeyEvent.ACTION_DOWN && k == KeyEvent.KEYCODE_DPAD_RIGHT) {
-                (v.context as MainActivity).focusChannelList()
+                onFocusRight() 
                 true
             } else {
                 false
@@ -59,7 +67,13 @@ class GroupAdapter(private val groups: List<String>, private val onSelect: (Stri
 }
 
 // --- CHANNEL ADAPTER ---
-class ChannelAdapter(private var list: List<Channel>, private val onPlay: (Channel)->Unit, private val onFav: (Channel)->Unit) : RecyclerView.Adapter<ChannelAdapter.VH>() {
+// Added 'onFocusLeft' parameter to handle navigation safely
+class ChannelAdapter(
+    private var list: List<Channel>, 
+    private val onPlay: (Channel)->Unit, 
+    private val onFav: (Channel)->Unit,
+    private val onFocusLeft: ()->Unit // <--- NEW: Callback for navigation
+) : RecyclerView.Adapter<ChannelAdapter.VH>() {
     
     fun update(n: List<Channel>) { 
         list = n
@@ -91,9 +105,10 @@ class ChannelAdapter(private var list: List<Channel>, private val onPlay: (Chann
             true 
         }
 
-        h.header.setOnKeyListener { v, k, e ->
+        // SAFE NAVIGATION: Calls the callback instead of casting MainActivity
+        h.header.setOnKeyListener { _, k, e ->
             if(e.action == KeyEvent.ACTION_DOWN && k == KeyEvent.KEYCODE_DPAD_LEFT) {
-                (v.context as MainActivity).focusGroupList()
+                onFocusLeft()
                 true
             } else {
                 false
