@@ -10,13 +10,13 @@ jobs:
     - uses: actions/setup-java@v3
       with: { java-version: '17', distribution: 'temurin' }
 
-    - name: Scaffold & Generate Resources
+    - name: Scaffold Project Structure
       run: |
         # 1. Create Directory Structure
         mkdir -p app/src/main/java/com/iptv/player
         mkdir -p app/src/main/res/{layout,values,drawable}
         
-        # 2. Move Kotlin Files
+        # 2. Move Kotlin Files (Assumes they are in root)
         mv *.kt app/src/main/java/com/iptv/player/ || true
 
         # ---------------------------------------------------------
@@ -25,7 +25,10 @@ jobs:
         echo '<?xml version="1.0" encoding="utf-8"?>
         <resources>
             <color name="bg_video">#000000</color>
-            <color name="bg_overlay">#E6121212</color> <color name="bg_panel">#1F1F1F</color>     <color name="highlight">#29B6F6</color>    <color name="text_primary">#FFFFFF</color>
+            <color name="bg_overlay">#E6121212</color>
+            <color name="bg_panel">#1F1F1F</color>
+            <color name="highlight">#29B6F6</color>
+            <color name="text_primary">#FFFFFF</color>
             <color name="text_secondary">#B0BEC5</color>
             <color name="bg_focus">#37474F</color>
         </resources>' > app/src/main/res/values/colors.xml
@@ -44,14 +47,13 @@ jobs:
         </selector>' > app/src/main/res/drawable/selector_item.xml
 
         # ---------------------------------------------------------
-        # GENERATE MAIN LAYOUT (Video + EPG + Search + Settings)
+        # GENERATE MAIN LAYOUT
         # ---------------------------------------------------------
         echo '<?xml version="1.0" encoding="utf-8"?>
         <androidx.drawerlayout.widget.DrawerLayout xmlns:android="http://schemas.android.com/apk/res/android"
             android:id="@+id/drawerLayout" android:layout_width="match_parent" android:layout_height="match_parent">
 
             <FrameLayout android:layout_width="match_parent" android:layout_height="match_parent" android:background="@color/bg_video">
-                
                 <androidx.media3.ui.PlayerView android:id="@+id/playerView"
                     android:layout_width="match_parent" android:layout_height="match_parent"
                     android:focusable="false" xmlns:app="http://schemas.android.com/apk/res-auto" app:use_controller="false" />
@@ -99,14 +101,12 @@ jobs:
                     <TextView android:id="@+id/tvSearchResultsCount" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="0 Results" android:textColor="@color/text_secondary" android:padding="8dp"/>
                     <androidx.recyclerview.widget.RecyclerView android:id="@+id/rvSearchResults" android:layout_width="match_parent" android:layout_height="match_parent" android:layout_marginTop="10dp"/>
                 </LinearLayout>
-
             </FrameLayout>
 
             <LinearLayout android:id="@+id/settingsDrawer"
                 android:layout_width="300dp" android:layout_height="match_parent"
                 android:layout_gravity="end" android:background="@color/bg_panel"
                 android:orientation="vertical" android:padding="20dp" android:clickable="true" android:focusable="true"/>
-
         </androidx.drawerlayout.widget.DrawerLayout>' > app/src/main/res/layout/activity_main.xml
 
         # ---------------------------------------------------------
@@ -142,7 +142,7 @@ jobs:
         </LinearLayout>' > app/src/main/res/layout/item_program.xml
 
         # ---------------------------------------------------------
-        # GENERATE GRADLE & MANIFEST
+        # GENERATE GRADLE CONFIG
         # ---------------------------------------------------------
         echo "include ':app'" > settings.gradle
         echo 'buildscript { repositories { google(); mavenCentral() } dependencies { classpath "com.android.tools.build:gradle:8.2.0" } } allprojects { repositories { google(); mavenCentral() } }' > build.gradle
@@ -185,8 +185,20 @@ jobs:
             </application>
         </manifest>' > app/src/main/AndroidManifest.xml
 
+    # ---------------------------------------------------------
+    # BUILD APK (FIXED: Generates Gradle Wrapper First)
+    # ---------------------------------------------------------
     - name: Build APK
-      run: ./gradlew assembleDebug
+      run: |
+        # 1. Initialize Gradle (This creates the missing ./gradlew file)
+        gradle wrapper
+        
+        # 2. Make it executable
+        chmod +x gradlew
+        
+        # 3. Run the Build
+        ./gradlew assembleDebug
+
     - uses: actions/upload-artifact@v4
       with: { name: TiviClone-Ultimate-APK, path: app/build/outputs/apk/debug/app-debug.apk }
       
