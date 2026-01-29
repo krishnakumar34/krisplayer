@@ -22,15 +22,22 @@ object M3uParser {
             stream?.let {
                 val reader = BufferedReader(InputStreamReader(it))
                 var line = reader.readLine()
-                var name="Unknown"; var grp="General"; var logo:String?=null; var drm:String?=null
+                var name="Unknown"
+                var grp="General"
+                var logo:String?=null
+                var drm:String?=null
                 var count = 1
                 
                 while (line != null) {
                     line = line.trim()
                     if (line.startsWith("#EXTINF:")) {
                         name = line.substringAfterLast(",").trim()
-                        if (line.contains("group-title=\"")) grp = line.substringAfter("group-title=\"").substringBefore("\"")
-                        if (line.contains("tvg-logo=\"")) logo = line.substringAfter("tvg-logo=\"").substringBefore("\"")
+                        if (line.contains("group-title=\"")) {
+                            grp = line.substringAfter("group-title=\"").substringBefore("\"")
+                        }
+                        if (line.contains("tvg-logo=\"")) {
+                            logo = line.substringAfter("tvg-logo=\"").substringBefore("\"")
+                        }
                     } 
                     else if (line.startsWith("#KODIPROP:inputstream.adaptive.license_key=")) {
                         drm = line.substringAfter("=")
@@ -58,7 +65,8 @@ object M3uParser {
                             drmLicense = drm,
                             isFavorite = favIds.contains(id)
                         ))
-                        name="Unknown"; drm=null // Reset
+                        name="Unknown"
+                        drm=null 
                     }
                     line = reader.readLine()
                 }
@@ -67,6 +75,7 @@ object M3uParser {
         
         val map = channels.groupBy { it.group }.toMutableMap()
         if(channels.isNotEmpty()) map["All Channels"] = channels
+        
         val favs = channels.filter { it.isFavorite }
         if(favs.isNotEmpty()) map["Favorites"] = favs
         
