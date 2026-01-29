@@ -1,4 +1,4 @@
-name: Build TiviMate Pro Fixed V3
+name: Build TiviMate Pro Fixed V4
 
 on: [push, workflow_dispatch]
 
@@ -101,7 +101,7 @@ jobs:
         }
         EOF
 
-        # 6. AndroidManifest.xml
+        # 6. AndroidManifest.xml (UPDATED WITH HTTP FIX)
         cat <<EOF > app/src/main/AndroidManifest.xml
         <?xml version="1.0" encoding="utf-8"?>
         <manifest xmlns:android="http://schemas.android.com/apk/res/android">
@@ -109,7 +109,14 @@ jobs:
             <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
             <uses-feature android:name="android.software.leanback" android:required="false" />
             <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
-            <application android:allowBackup="true" android:label="TiviClone Pro" android:theme="@style/Theme.AppCompat.NoActionBar">
+            
+            <application
+                android:allowBackup="true"
+                android:label="TiviClone Pro"
+                android:usesCleartextTraffic="true"
+                android:requestLegacyExternalStorage="true"
+                android:theme="@style/Theme.AppCompat.NoActionBar">
+                
                 <activity android:name=".MainActivity" android:exported="true"
                     android:screenOrientation="sensorLandscape"
                     android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenSize">
@@ -144,7 +151,7 @@ jobs:
         </selector>
         EOF
 
-        # 9. UI Resources (Layout - FIX APPLIED HERE)
+        # 9. UI Resources (Layout)
         cat <<EOF > app/src/main/res/layout/activity_main.xml
         <?xml version="1.0" encoding="utf-8"?>
         <androidx.drawerlayout.widget.DrawerLayout xmlns:android="http://schemas.android.com/apk/res/android"
