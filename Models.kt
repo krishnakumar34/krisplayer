@@ -27,8 +27,8 @@ data class Channel(
 data class Program(val title: String, val time: String)
 
 fun generateDummyPrograms(): List<Program> {
-    val shows = listOf("News Hour", "Live Sports", "Blockbuster Movie", "Kids Show", "Documentary", "Weather Report")
+    val shows = listOf("News", "Sports", "Movie", "Kids", "Doc", "Weather")
     return (0..10).map { 
-        Program(shows.random(), "${8+it}:00 - ${9+it}:00") 
+        Program(shows.random(), "${8+it}:00") 
     }
 }
