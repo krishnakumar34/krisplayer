@@ -1,4 +1,4 @@
-name: Build TiviMate Ultimate Final
+name: Build TiviMate Pro Final
 
 on: [push, workflow_dispatch]
 
@@ -10,13 +10,21 @@ jobs:
     - uses: actions/setup-java@v3
       with: { java-version: '17', distribution: 'temurin' }
 
-    - name: Scaffold Project & Generate Files
+    - name: Initialize Gradle Wrapper (Clean)
+      run: |
+        # 1. Generate Wrapper BEFORE creating build files
+        # This prevents Gradle 9.3 from failing on our config
+        mkdir -p app
+        gradle wrapper --gradle-version 8.2
+        chmod +x gradlew
+
+    - name: Generate Project Files
       run: |
         # 1. Create Directory Structure
         mkdir -p app/src/main/java/com/iptv/player
         mkdir -p app/src/main/res/{layout,values,drawable}
         
-        # 2. Move Kotlin Files (Assumes they are in root of repo)
+        # 2. Move Kotlin Files
         mv *.kt app/src/main/java/com/iptv/player/ || true
 
         # ==========================================
@@ -131,7 +139,7 @@ jobs:
         EOF
 
         # ==========================================
-        # 7. GENERATE COLORS (TiviMate Dark Theme)
+        # 7. GENERATE COLORS
         # ==========================================
         cat <<EOF > app/src/main/res/values/colors.xml
         <?xml version="1.0" encoding="utf-8"?>
@@ -147,7 +155,7 @@ jobs:
         EOF
 
         # ==========================================
-        # 8. GENERATE DRAWABLES
+        # 8. GENERATE DRAWABLE
         # ==========================================
         cat <<EOF > app/src/main/res/drawable/selector_item.xml
         <?xml version="1.0" encoding="utf-8"?>
@@ -271,10 +279,7 @@ jobs:
 
     - name: Build APK
       run: |
-        # Force Gradle 8.2 to match AGP 8.2.0 (Prevents API errors with Gradle 9.0)
-        gradle wrapper --gradle-version 8.2
-        
-        chmod +x gradlew
+        # Use the wrapper we generated in Step 1
         ./gradlew assembleDebug
 
     - uses: actions/upload-artifact@v4
