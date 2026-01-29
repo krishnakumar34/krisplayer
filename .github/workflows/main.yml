@@ -1,4 +1,4 @@
-name: Build TiviMate Pro Final Fixed
+name: Build TiviMate Pro Bootstrap
 
 on: [push, workflow_dispatch]
 
@@ -10,20 +10,34 @@ jobs:
     - uses: actions/setup-java@v3
       with: { java-version: '17', distribution: 'temurin' }
 
-    - name: Setup & Build
+    - name: Bootstrap & Build
       run: |
         # ---------------------------------------------------------
-        # 1. SETUP DIRECTORY & FILES
+        # STEP 1: BOOTSTRAP GRADLE WRAPPER
+        # We create a dummy build file first so "gradle wrapper" 
+        # doesn't crash on the complex Android config.
         # ---------------------------------------------------------
-        mkdir -p app/src/main/java/com/iptv/player
-        mkdir -p app/src/main/res/{layout,values,drawable}
+        mkdir -p app
+        echo "task wrapper(type: Wrapper) { gradleVersion = '8.2' }" > build.gradle
         
-        # Move Kotlin files (Fail silently if missing to prevent crash, assuming they are there)
-        mv *.kt app/src/main/java/com/iptv/player/ || true
+        # Generate the wrapper safely using the global Gradle
+        gradle wrapper --gradle-version 8.2
+        chmod +x gradlew
+        
+        # Verify it works (should output Gradle 8.2)
+        ./gradlew -v
 
         # ---------------------------------------------------------
-        # 2. GENERATE ROOT build.gradle (CRITICAL)
+        # STEP 2: GENERATE REAL PROJECT FILES
+        # Now we overwrite the dummy files with the real code.
         # ---------------------------------------------------------
+        
+        # 1. Directory Structure
+        mkdir -p app/src/main/java/com/iptv/player
+        mkdir -p app/src/main/res/{layout,values,drawable}
+        mv *.kt app/src/main/java/com/iptv/player/ || true
+
+        # 2. REAL build.gradle (Overwrites dummy)
         cat <<EOF > build.gradle
         buildscript {
             repositories {
@@ -46,26 +60,20 @@ jobs:
         }
         EOF
 
-        # ---------------------------------------------------------
-        # 3. GENERATE settings.gradle (CRITICAL)
-        # ---------------------------------------------------------
+        # 3. settings.gradle
         cat <<EOF > settings.gradle
         include ':app'
         EOF
 
-        # ---------------------------------------------------------
-        # 4. GENERATE app/build.gradle
-        # ---------------------------------------------------------
+        # 4. app/build.gradle
         cat <<EOF > app/build.gradle
         plugins {
             id 'com.android.application'
             id 'org.jetbrains.kotlin.android'
         }
-
         android {
             namespace 'com.iptv.player'
             compileSdk 34
-
             defaultConfig {
                 applicationId 'com.iptv.player'
                 minSdk 21
@@ -73,20 +81,13 @@ jobs:
                 versionCode 1
                 versionName '1.0'
             }
-
-            buildFeatures {
-                viewBinding true
-            }
-
+            buildFeatures { viewBinding true }
             compileOptions {
                 sourceCompatibility JavaVersion.VERSION_1_8
                 targetCompatibility JavaVersion.VERSION_1_8
             }
-            kotlinOptions {
-                jvmTarget = '1.8'
-            }
+            kotlinOptions { jvmTarget = '1.8' }
         }
-
         dependencies {
             implementation 'androidx.core:core-ktx:1.12.0'
             implementation 'androidx.appcompat:appcompat:1.6.1'
@@ -102,9 +103,7 @@ jobs:
         }
         EOF
 
-        # ---------------------------------------------------------
-        # 5. GENERATE AndroidManifest.xml
-        # ---------------------------------------------------------
+        # 5. AndroidManifest.xml
         cat <<EOF > app/src/main/AndroidManifest.xml
         <?xml version="1.0" encoding="utf-8"?>
         <manifest xmlns:android="http://schemas.android.com/apk/res/android">
@@ -112,30 +111,17 @@ jobs:
             <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
             <uses-feature android:name="android.software.leanback" android:required="false" />
             <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
-
-            <application
-                android:allowBackup="true"
-                android:label="TiviClone Ultimate"
-                android:theme="@style/Theme.AppCompat.NoActionBar">
-                <activity android:name=".MainActivity"
-                    android:exported="true"
+            <application android:allowBackup="true" android:label="TiviClone Pro" android:theme="@style/Theme.AppCompat.NoActionBar">
+                <activity android:name=".MainActivity" android:exported="true"
                     android:screenOrientation="sensorLandscape"
                     android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenSize">
-                    <intent-filter>
-                        <action android:name="android.intent.action.MAIN" />
-                        <category android:name="android.intent.category.LAUNCHER" />
-                        <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
-                    </intent-filter>
+                    <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /><category android:name="android.intent.category.LEANBACK_LAUNCHER" /></intent-filter>
                 </activity>
             </application>
         </manifest>
         EOF
 
-        # ---------------------------------------------------------
-        # 6. GENERATE RESOURCES (Colors, Drawables, Layouts)
-        # ---------------------------------------------------------
-        
-        # Colors
+        # 6. UI Resources (Colors, Drawables, Layouts)
         cat <<EOF > app/src/main/res/values/colors.xml
         <?xml version="1.0" encoding="utf-8"?>
         <resources>
@@ -149,7 +135,6 @@ jobs:
         </resources>
         EOF
 
-        # Drawable
         cat <<EOF > app/src/main/res/drawable/selector_item.xml
         <?xml version="1.0" encoding="utf-8"?>
         <selector xmlns:android="http://schemas.android.com/apk/res/android">
@@ -160,7 +145,6 @@ jobs:
         </selector>
         EOF
 
-        # Layout: activity_main.xml
         cat <<EOF > app/src/main/res/layout/activity_main.xml
         <?xml version="1.0" encoding="utf-8"?>
         <androidx.drawerlayout.widget.DrawerLayout xmlns:android="http://schemas.android.com/apk/res/android"
@@ -217,7 +201,6 @@ jobs:
         </androidx.drawerlayout.widget.DrawerLayout>
         EOF
 
-        # Layout: item_channel.xml
         cat <<EOF > app/src/main/res/layout/item_channel.xml
         <?xml version="1.0" encoding="utf-8"?>
         <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
@@ -237,7 +220,6 @@ jobs:
         </LinearLayout>
         EOF
 
-        # Layout: item_program.xml
         cat <<EOF > app/src/main/res/layout/item_program.xml
         <?xml version="1.0" encoding="utf-8"?>
         <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
@@ -250,16 +232,10 @@ jobs:
         EOF
 
         # ---------------------------------------------------------
-        # 7. GENERATE WRAPPER & BUILD (Sequence is Vital)
+        # STEP 3: RUN THE BUILD (Using the Safe 8.2 Wrapper)
         # ---------------------------------------------------------
-        # Now that build.gradle exists, we can safely generate the wrapper
-        gradle wrapper --gradle-version 8.2
-        
-        chmod +x gradlew
-        
-        # Now we build
         ./gradlew assembleDebug
 
     - uses: actions/upload-artifact@v4
-      with: { name: TiviClone-Ultimate-APK, path: app/build/outputs/apk/debug/app-debug.apk }
+      with: { name: TiviClone-Pro-APK, path: app/build/outputs/apk/debug/app-debug.apk }
       
