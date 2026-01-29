@@ -48,7 +48,6 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // 1. SAFE LAYOUT LOADING
         try {
             setContentView(R.layout.activity_main)
         } catch (e: Exception) {
@@ -56,7 +55,6 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        // 2. INITIALIZATION
         try {
             repo = Repository(this)
             
@@ -72,9 +70,8 @@ class MainActivity : AppCompatActivity() {
             rvChannels?.layoutManager = LinearLayoutManager(this)
 
             setupSearchUI()
-            updateSettingsDrawer() // <--- Checks if Local Option exists
+            updateSettingsDrawer()
 
-            // Load Active Playlist or Show Welcome
             val active = repo.getActivePlaylist()
             if (active != null) {
                 loadData(active)
@@ -96,32 +93,37 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    // --- 1. DATA LOADING (FIXED: Shows Menu automatically) ---
     private fun loadData(p: Playlist) {
         lifecycleScope.launch {
             try {
                 Toast.makeText(this@MainActivity, "Loading Playlist...", Toast.LENGTH_SHORT).show()
                 
-                // Parse in background
                 allData = M3uParser.parse(this@MainActivity, p, repo.getFavIds())
                 allChannelsFlat = allData.values.flatten().distinctBy { it.id }
                 
-                // Setup Adapters
-                rvGroups?.adapter = GroupAdapter(allData.keys.toList()) { group ->
+                // UPDATED: Pass 'focusChannelList' as the 3rd parameter
+                rvGroups?.adapter = GroupAdapter(allData.keys.toList(), { group ->
                     (rvChannels?.adapter as? ChannelAdapter)?.update(allData[group] ?: emptyList())
-                }
+                }, { 
+                    focusChannelList() 
+                })
                 
                 if (allData.isNotEmpty()) {
                     val first = allData.keys.first()
-                    rvChannels?.adapter = ChannelAdapter(allData[first] ?: emptyList(), { play(it) }, { toggleFav(it) })
+                    // UPDATED: Pass 'focusGroupList' as the 4th parameter
+                    rvChannels?.adapter = ChannelAdapter(
+                        allData[first] ?: emptyList(), 
+                        { play(it) }, 
+                        { toggleFav(it) },
+                        { focusGroupList() }
+                    )
                     
-                    // *** FIX: FORCE MENU TO SHOW ***
                     epgContainer?.visibility = View.VISIBLE
                     rvGroups?.requestFocus()
                     
                     Toast.makeText(this@MainActivity, "Loaded ${allChannelsFlat.size} Channels", Toast.LENGTH_SHORT).show()
                 } else {
-                    Toast.makeText(this@MainActivity, "No channels found in this URL!", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this@MainActivity, "No channels found!", Toast.LENGTH_LONG).show()
                 }
             } catch (e: Exception) {
                 showError("Playlist Error", "Failed to parse: ${e.message}")
@@ -129,19 +131,16 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // --- 2. SETTINGS DRAWER (FIXED: Explicit Buttons) ---
     private fun updateSettingsDrawer() {
         val root = findViewById<LinearLayout>(R.id.settingsDrawer) ?: return
         root.removeAllViews()
         
-        // Helper to create visible buttons
         fun addButton(text: String, onClick: ()->Unit) {
             val btn = Button(this)
             btn.text = text
             btn.setTextColor(Color.WHITE)
             btn.setBackgroundResource(android.R.drawable.btn_default)
             btn.setOnClickListener { onClick() }
-            // Add spacing
             val params = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 
                 LinearLayout.LayoutParams.WRAP_CONTENT
@@ -158,7 +157,6 @@ class MainActivity : AppCompatActivity() {
         title.setPadding(0, 0, 0, 20)
         root.addView(title)
 
-        // *** THESE ARE THE BUTTONS YOU WERE MISSING ***
         addButton("Search Channels") { 
             openSearch()
             drawerLayout?.closeDrawers() 
@@ -182,7 +180,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // --- 3. DIALOGS ---
     private fun showAddUrlDialog() {
         val input = EditText(this)
         input.hint = "http://example.com/playlist.m3u"
@@ -197,7 +194,7 @@ class MainActivity : AppCompatActivity() {
                     val p = Playlist(name="Playlist ${repo.getPlaylists().size+1}", source=url, type=PlaylistType.REMOTE)
                     repo.savePlaylist(p)
                     updateSettingsDrawer()
-                    loadData(p) // Loads and opens menu
+                    loadData(p)
                 }
             }
             .setNegativeButton("Cancel", null)
@@ -208,10 +205,10 @@ class MainActivity : AppCompatActivity() {
         try {
             val intent = Intent(Intent.ACTION_OPEN_DOCUMENT)
             intent.addCategory(Intent.CATEGORY_OPENABLE)
-            intent.type = "*/*" // Allow all files, user selects .m3u
+            intent.type = "*/*"
             startActivityForResult(intent, PICK_FILE)
         } catch (e: Exception) {
-            Toast.makeText(this, "No File Manager found on this device", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "No File Manager found", Toast.LENGTH_LONG).show()
         }
     }
     
@@ -238,7 +235,6 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    // --- 4. PLAYER & SEARCH LOGIC ---
     private fun play(c: Channel) {
         try {
             repo.addRecent(c)
@@ -249,7 +245,7 @@ class MainActivity : AppCompatActivity() {
             player?.setMediaItem(builder.build())
             player?.prepare()
             player?.play()
-            epgContainer?.visibility = View.GONE // Hide menu when playing
+            epgContainer?.visibility = View.GONE
         } catch (e: Exception) {
             Toast.makeText(this, "Playback Error: ${e.message}", Toast.LENGTH_SHORT).show()
         }
@@ -281,12 +277,13 @@ class MainActivity : AppCompatActivity() {
         val results = allChannelsFlat.filter { it.name.contains(query, ignoreCase = true) }
         tvSearchCount?.text = "${results.size} Results"
         
-        rvSearchResults?.adapter = ChannelAdapter(results, { c -> 
-            play(c)
-            closeSearch() 
-        }, { c -> 
-            toggleFav(c) 
-        })
+        // UPDATED: Added empty callback for 4th parameter since search doesn't navigate left
+        rvSearchResults?.adapter = ChannelAdapter(
+            results, 
+            { c -> play(c); closeSearch() }, 
+            { c -> toggleFav(c) },
+            { } // Empty lambda for navigation
+        )
     }
 
     private fun openSearch() { 
@@ -303,13 +300,14 @@ class MainActivity : AppCompatActivity() {
     }
     
     private fun showKeyboard() {
-        // Basic keyboard trigger
-        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
+        // FIXED: Explicit android.content.Context to avoid 'Unresolved reference'
+        val imm = getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
         etSearch?.let { imm.showSoftInput(it, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT) }
     }
     
     private fun hideKeyboard() {
-        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
+        // FIXED: Explicit android.content.Context to avoid 'Unresolved reference'
+        val imm = getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
         etSearch?.let { imm.hideSoftInputFromWindow(it.windowToken, 0) }
     }
 
@@ -320,9 +318,10 @@ class MainActivity : AppCompatActivity() {
         (rvSearchResults?.adapter as? ChannelAdapter)?.notifyDataSetChanged()
     }
 
-    // --- 5. REMOTE CONTROL ---
+    fun focusGroupList() { rvGroups?.requestFocus() }
+    fun focusChannelList() { rvChannels?.requestFocus() }
+
     override fun onKeyDown(k: Int, e: KeyEvent?): Boolean {
-        // Toggle Menu on OK/Center if not already visible
         if ((k == KeyEvent.KEYCODE_DPAD_CENTER || k == KeyEvent.KEYCODE_ENTER || k == KeyEvent.KEYCODE_MENU) && epgContainer?.visibility != View.VISIBLE) {
             epgContainer?.visibility = View.VISIBLE
             rvGroups?.requestFocus()
@@ -351,7 +350,7 @@ class MainActivity : AppCompatActivity() {
             when(k) {
                 KeyEvent.KEYCODE_DPAD_RIGHT -> { 
                     drawerLayout?.openDrawer(Gravity.END)
-                    updateSettingsDrawer() // Ensure drawer is fresh
+                    updateSettingsDrawer()
                     return true 
                 }
                 KeyEvent.KEYCODE_DPAD_DOWN -> { 
