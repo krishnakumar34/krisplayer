@@ -105,10 +105,12 @@ class MainActivity : AppCompatActivity() {
         }
         val results = allChannelsFlat.filter { it.name.contains(query, ignoreCase = true) }
         tvSearchCount.text = "${results.size} Results"
+        
+        // FIX: Explicitly name the parameter 'c' in BOTH lambdas
         rvSearchResults.adapter = ChannelAdapter(results, { c -> 
             play(c)
             closeSearch() 
-        }, { 
+        }, { c -> 
             toggleFav(c) 
         })
     }
@@ -136,6 +138,7 @@ class MainActivity : AppCompatActivity() {
             }
             if (allData.isNotEmpty()) {
                 val first = allData.keys.first()
+                // FIX: Use 'it' or explicit names here too
                 rvChannels.adapter = ChannelAdapter(allData[first] ?: emptyList(), { play(it) }, { toggleFav(it) })
             }
         }
