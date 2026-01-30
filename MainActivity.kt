@@ -4,6 +4,7 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
 import android.graphics.Color
+import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -35,7 +36,7 @@ class MainActivity : AppCompatActivity() {
     private var epgContainer: LinearLayout? = null
     private var rvGroups: RecyclerView? = null
     private var rvChannels: RecyclerView? = null
-    private var rvRecents: RecyclerView? = null // Added Recents Recycler
+    private var rvRecents: RecyclerView? = null
     private var searchContainer: LinearLayout? = null
     private var etSearch: EditText? = null
     private var rvSearchResults: RecyclerView? = null
@@ -44,7 +45,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var repo: Repository
     private var allData = mapOf<String, List<Channel>>()
     private var allChannelsFlat = listOf<Channel>()
-    private var currentChannel: Channel? = null // Track current channel for Next/Prev
+    private var currentChannel: Channel? = null
     private var numBuffer = ""
     private val handler = Handler(Looper.getMainLooper())
     private val PICK_FILE = 101
@@ -52,7 +53,7 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // --- DEFECT FIX 5: FORCE NETWORK PERMISSIONS (NUCLEAR BYPASS) ---
+        // NUCLEAR BYPASS: Allow all network operations on main thread (fixes some strict redirect issues)
         val policy = StrictMode.ThreadPolicy.Builder().permitAll().build()
         StrictMode.setThreadPolicy(policy)
         
@@ -66,7 +67,7 @@ class MainActivity : AppCompatActivity() {
             epgContainer = findViewById(R.id.epgContainer)
             rvGroups = findViewById(R.id.rvGroups)
             rvChannels = findViewById(R.id.rvChannels)
-            rvRecents = findViewById(R.id.rvRecents) // Bind Recents
+            rvRecents = findViewById(R.id.rvRecents)
 
             rvGroups?.layoutManager = LinearLayoutManager(this)
             rvChannels?.layoutManager = LinearLayoutManager(this)
@@ -85,11 +86,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun initializePlayer() {
+        // --- FIX FOR HTTPS -> HTTP REDIRECTS ---
         val httpFactory = DefaultHttpDataSource.Factory()
-            .setAllowCrossProtocolRedirects(true) // Fix Redirects
-            //.setUserAgent("TiviMate/4.7.0")
-            .setConnectTimeoutMs(8000)
-            .setReadTimeoutMs(8000)
+            .setAllowCrossProtocolRedirects(true) // CRITICAL: Allows PHP (https) -> Stream (http)
+            .setUserAgent("TiviMate/4.7.0") // Spoof User-Agent
+            .setConnectTimeoutMs(15000) // Longer timeout for slow redirects
+            .setReadTimeoutMs(15000)
         
         val dataSourceFactory = DefaultDataSource.Factory(this, httpFactory)
         
@@ -99,9 +101,7 @@ class MainActivity : AppCompatActivity() {
             
         val playerView = findViewById<PlayerView>(R.id.playerView)
         playerView?.player = player
-        
-        // --- DEFECT FIX 4: FORCE FULLSCREEN VIDEO (NO BLACK BARS) ---
-        playerView?.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL
+        playerView?.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL // Remove black bars
     }
 
     private fun showError(title: String, msg: String) {
@@ -125,7 +125,7 @@ class MainActivity : AppCompatActivity() {
                     rvChannels?.adapter = ChannelAdapter(allData[first] ?: emptyList(), { play(it) }, { toggleFav(it) }, { focusGroupList() })
                     epgContainer?.visibility = View.VISIBLE
                     rvGroups?.requestFocus()
-                    updateRecentList() // Init recents
+                    updateRecentList()
                 } else {
                     Toast.makeText(this@MainActivity, "No channels found!", Toast.LENGTH_LONG).show()
                 }
@@ -136,18 +136,28 @@ class MainActivity : AppCompatActivity() {
     private fun updateSettingsDrawer() {
         val root = findViewById<LinearLayout>(R.id.settingsDrawer) ?: return
         root.removeAllViews()
-        fun btn(t: String, a: () -> Unit) {
-            val b = Button(this); b.text = t; b.setTextColor(Color.WHITE)
+        
+        val title = TextView(this); title.text="SETTINGS"; title.textSize=22f; title.setTextColor(Color.CYAN); root.addView(title)
+
+        fun btn(t: String, tag: String, a: () -> Unit) {
+            val b = Button(this)
+            b.text = t
+            b.tag = tag // Tag to identify for focus
+            b.setTextColor(Color.WHITE)
             b.setBackgroundResource(android.R.drawable.btn_default)
+            b.isFocusable = true // CRITICAL: Allow TV Remote Focus
+            b.isFocusableInTouchMode = true
             b.setOnClickListener { a() }
             root.addView(b)
         }
-        val t = TextView(this); t.text="SETTINGS"; t.textSize=22f; t.setTextColor(Color.CYAN); root.addView(t)
-        btn("Search") { openSearch(); drawerLayout?.closeDrawers() }
-        btn("+ URL Playlist") { showAddUrlDialog() }
-        btn("+ Local File") { openFilePicker() }
-        val s = TextView(this); s.text="PLAYLISTS"; s.textSize=18f; s.setTextColor(Color.LTGRAY); root.addView(s)
-        repo.getPlaylists().forEach { p -> btn(p.name) { repo.setActivePlaylist(p.id); loadData(p); drawerLayout?.closeDrawers() } }
+
+        btn("Search Channels", "first") { openSearch(); drawerLayout?.closeDrawers() }
+        btn("+ Add URL Playlist", "other") { showAddUrlDialog() }
+        btn("+ Add Local File", "other") { openFilePicker() }
+        
+        val sub = TextView(this); sub.text="PLAYLISTS"; sub.textSize=18f; sub.setTextColor(Color.LTGRAY); sub.setPadding(0,20,0,10); root.addView(sub)
+
+        repo.getPlaylists().forEach { p -> btn(p.name, "list") { repo.setActivePlaylist(p.id); loadData(p); drawerLayout?.closeDrawers() } }
     }
 
     private fun showAddUrlDialog() {
@@ -186,26 +196,23 @@ class MainActivity : AppCompatActivity() {
         try {
             currentChannel = c
             repo.addRecent(c)
-            updateRecentList() // --- DEFECT FIX 6: REFRESH RECENTS ON PLAY ---
+            updateRecentList()
             
-            val builder = MediaItem.Builder().setUri(c.url)
+            val builder = MediaItem.Builder().setUri(Uri.parse(c.url))
             if (c.drmLicense != null) builder.setDrmConfiguration(DrmConfiguration.Builder(androidx.media3.common.C.WIDEVINE_UUID).setLicenseUri(c.drmLicense).build())
             
             player?.setMediaItem(builder.build())
             player?.prepare()
             player?.play()
             
-            epgContainer?.visibility = View.GONE // Hide menu to watch full screen
-        } catch (e: Exception) { Toast.makeText(this, "Error: ${e.message}", Toast.LENGTH_SHORT).show() }
+            epgContainer?.visibility = View.GONE
+        } catch (e: Exception) { Toast.makeText(this, "Playback Error: ${e.message}", Toast.LENGTH_SHORT).show() }
     }
 
-    // --- DEFECT FIX 6: FUNCTION TO SHOW RECENTS ---
     private fun updateRecentList() {
         val recents = repo.getRecents()
         if (recents.isNotEmpty()) {
-            findViewById<View>(R.id.recentContainer)?.visibility = View.GONE // Hide initially, show on Down key
-            // We reuse ChannelAdapter but with horizontal layout handling if needed, 
-            // or just simple display. For now, simple adapter:
+            findViewById<View>(R.id.recentContainer)?.visibility = View.GONE 
             rvRecents?.adapter = ChannelAdapter(recents, { play(it) }, { toggleFav(it) }, {})
         }
     }
@@ -240,50 +247,36 @@ class MainActivity : AppCompatActivity() {
     fun focusGroupList() { rvGroups?.requestFocus() }
     fun focusChannelList() { rvChannels?.requestFocus() }
 
-    // --- CRITICAL DEFECT FIXES: REMOTE CONTROL LOGIC ---
     override fun onKeyDown(k: Int, e: KeyEvent?): Boolean {
-        // --- DEFECT FIX 3: NUMBER ZAPPING ---
         if (k in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9) {
             numBuffer += (k - KeyEvent.KEYCODE_0)
             findViewById<TextView>(R.id.tvOverlayNum)?.let { tv ->
-                tv.text = numBuffer
-                tv.visibility = View.VISIBLE
+                tv.text = numBuffer; tv.visibility = View.VISIBLE
                 handler.removeCallbacksAndMessages(null)
                 handler.postDelayed({
-                    val target = allChannelsFlat.find { it.number.toString() == numBuffer }
-                    if (target != null) {
-                        play(target)
-                    } else {
-                        Toast.makeText(this, "Channel $numBuffer not found", Toast.LENGTH_SHORT).show()
-                    }
-                    numBuffer = ""
-                    tv.visibility = View.GONE
-                }, 2000) // 2 second wait
+                    allChannelsFlat.find { it.number.toString() == numBuffer }?.let { play(it) } ?: Toast.makeText(this, "Channel $numBuffer not found", Toast.LENGTH_SHORT).show()
+                    numBuffer = ""; tv.visibility = View.GONE
+                }, 2000)
             }
             return true
         }
 
-        // --- DEFECT FIX 1: CHANNEL UP/DOWN ZAPPING ---
-        // Only zap if menu is HIDDEN (watching video)
         if (epgContainer?.visibility != View.VISIBLE && searchContainer?.visibility != View.VISIBLE) {
             when(k) {
                 KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_CHANNEL_UP -> {
                     currentChannel?.let { curr ->
                         val idx = allChannelsFlat.indexOf(curr)
-                        if (idx > 0) play(allChannelsFlat[idx - 1]) // Prev Channel
+                        if (idx > 0) play(allChannelsFlat[idx - 1])
                     }
                     return true
                 }
                 KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_CHANNEL_DOWN -> {
-                    // Fix: Down usually means Next Channel in lists, but sometimes user wants "Recent" menu.
-                    // Let's make "Channel Down" key do zapping, and "D-Pad Down" open recents.
                     if (k == KeyEvent.KEYCODE_CHANNEL_DOWN) {
                         currentChannel?.let { curr ->
                             val idx = allChannelsFlat.indexOf(curr)
                             if (idx < allChannelsFlat.size - 1) play(allChannelsFlat[idx + 1])
                         }
                     } else {
-                        // D-Pad Down opens Recents
                         findViewById<View>(R.id.recentContainer)?.visibility = View.VISIBLE
                         rvRecents?.requestFocus()
                     }
@@ -292,15 +285,15 @@ class MainActivity : AppCompatActivity() {
                 KeyEvent.KEYCODE_DPAD_RIGHT -> { 
                     drawerLayout?.openDrawer(Gravity.END)
                     updateSettingsDrawer()
+                    // CRITICAL FIX: FORCE FOCUS ON SETTINGS
+                    val root = findViewById<LinearLayout>(R.id.settingsDrawer)
+                    root?.postDelayed({
+                        val firstBtn = root.findViewWithTag<View>("first")
+                        firstBtn?.requestFocus()
+                    }, 100)
                     return true 
                 }
-                // --- DEFECT FIX 2: BACK BUTTON ---
-                KeyEvent.KEYCODE_BACK -> {
-                    epgContainer?.visibility = View.VISIBLE
-                    rvGroups?.requestFocus()
-                    return true
-                }
-                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_MENU -> {
+                KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_MENU -> {
                     epgContainer?.visibility = View.VISIBLE
                     rvGroups?.requestFocus()
                     return true
@@ -308,21 +301,10 @@ class MainActivity : AppCompatActivity() {
             }
         } 
         
-        // Navigation inside Menu
         if (k == KeyEvent.KEYCODE_BACK) {
-            if (searchContainer?.visibility == View.VISIBLE) {
-                closeSearch()
-                return true
-            }
-            if (drawerLayout?.isDrawerOpen(Gravity.END) == true) {
-                drawerLayout?.closeDrawers()
-                return true
-            }
-            if (epgContainer?.visibility == View.VISIBLE) {
-                // If in menu, Back hides menu to watch video
-                epgContainer?.visibility = View.GONE
-                return true
-            }
+            if (searchContainer?.visibility == View.VISIBLE) { closeSearch(); return true }
+            if (drawerLayout?.isDrawerOpen(Gravity.END) == true) { drawerLayout?.closeDrawers(); return true }
+            if (epgContainer?.visibility == View.VISIBLE) { epgContainer?.visibility = View.GONE; return true }
         }
 
         return super.onKeyDown(k, e)
