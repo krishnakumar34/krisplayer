@@ -18,8 +18,10 @@ import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.drawerlayout.widget.DrawerLayout
 import androidx.lifecycle.lifecycleScope
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaItem.DrmConfiguration
+import androidx.media3.common.MimeTypes
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
@@ -54,8 +56,8 @@ class MainActivity : AppCompatActivity() {
     private var numBuffer = ""
     private val handler = Handler(Looper.getMainLooper())
     private val PICK_FILE = 101
-    
-    // --- REDIRECT SOLVER CLIENT ---
+
+    // --- MANUAL RESOLVER CLIENT (The Fix for Ramkumar/Redirects) ---
     private val resolverClient = OkHttpClient.Builder()
         .followRedirects(true)
         .followSslRedirects(true)
@@ -66,7 +68,7 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // NUCLEAR BYPASS: Fixes android.os.NetworkOnMainThreadException during strict redirects
+        // NUCLEAR BYPASS
         val policy = StrictMode.ThreadPolicy.Builder().permitAll().build()
         StrictMode.setThreadPolicy(policy)
         
@@ -99,10 +101,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun initializePlayer() {
-        // --- PLAYER CONFIG FOR HTTPS -> HTTP ---
         val httpFactory = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
-            .setUserAgent("TiviMate/4.7.0")
+            .setUserAgent("TiviMate/4.7.0") 
             .setConnectTimeoutMs(15000)
             .setReadTimeoutMs(15000)
         
@@ -117,6 +118,64 @@ class MainActivity : AppCompatActivity() {
         playerView?.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL
     }
 
+    // --- THE "RESOLVE STREAM" FUNCTION IS BACK ---
+    private suspend fun resolveRedirects(url: String): String {
+        return withContext(Dispatchers.IO) {
+            try {
+                // If it's already an IP address or simple link, skip resolving to save time
+                if (url.contains(".ts") || url.contains(".m3u8") && !url.contains(".php")) {
+                    return@withContext url
+                }
+                
+                val req = Request.Builder()
+                    .url(url)
+                    .head() // Use HEAD to check headers without downloading
+                    .header("User-Agent", "TiviMate/4.7.0")
+                    .build()
+                    
+                val resp = resolverClient.newCall(req).execute()
+                val finalUrl = resp.request.url.toString()
+                resp.close()
+                return@withContext finalUrl
+            } catch (e: Exception) {
+                return@withContext url
+            }
+        }
+    }
+
+    private fun play(c: Channel) {
+        // Must use lifecycleScope to run the Resolver
+        lifecycleScope.launch {
+            try {
+                currentChannel = c
+                repo.addRecent(c)
+                updateRecentList()
+
+                // 1. RESOLVE THE URL MANUALLY FIRST
+                // This turns "https://ramkumar..." into "http://novst3..." BEFORE the player sees it
+                val realUrl = resolveRedirects(c.url)
+                
+                // 2. FORCE HLS MIME TYPE
+                val builder = MediaItem.Builder()
+                    .setUri(Uri.parse(realUrl))
+                    .setMimeType(MimeTypes.APPLICATION_M3U8) 
+                
+                if (c.drmLicense != null) {
+                    builder.setDrmConfiguration(DrmConfiguration.Builder(C.WIDEVINE_UUID).setLicenseUri(c.drmLicense).build())
+                }
+                
+                player?.setMediaItem(builder.build())
+                player?.prepare()
+                player?.play()
+                
+                epgContainer?.visibility = View.GONE
+            } catch (e: Exception) { 
+                Toast.makeText(this@MainActivity, "Error: ${e.message}", Toast.LENGTH_SHORT).show() 
+            }
+        }
+    }
+    
+    // --- UI HELPERS ---
     private fun showError(title: String, msg: String) {
         AlertDialog.Builder(this).setTitle(title).setMessage(msg).setPositiveButton("Close") { _, _ -> }.show()
     }
@@ -149,27 +208,19 @@ class MainActivity : AppCompatActivity() {
     private fun updateSettingsDrawer() {
         val root = findViewById<LinearLayout>(R.id.settingsDrawer) ?: return
         root.removeAllViews()
-        
         val title = TextView(this); title.text="SETTINGS"; title.textSize=22f; title.setTextColor(Color.CYAN); root.addView(title)
-
+        
         fun btn(t: String, tag: String, a: () -> Unit) {
-            val b = Button(this)
-            b.text = t
-            b.tag = tag 
-            b.setTextColor(Color.WHITE)
-            b.setBackgroundResource(android.R.drawable.btn_default)
-            b.isFocusable = true
-            b.isFocusableInTouchMode = true
-            b.setOnClickListener { a() }
+            val b = Button(this); b.text = t; b.tag = tag; b.setTextColor(Color.WHITE)
+            b.setBackgroundResource(android.R.drawable.btn_default); b.isFocusable = true; b.setOnClickListener { a() }
             root.addView(b)
         }
-
+        
         btn("Search Channels", "first") { openSearch(); drawerLayout?.closeDrawers() }
         btn("+ Add URL Playlist", "other") { showAddUrlDialog() }
         btn("+ Add Local File", "other") { openFilePicker() }
         
         val sub = TextView(this); sub.text="PLAYLISTS"; sub.textSize=18f; sub.setTextColor(Color.LTGRAY); sub.setPadding(0,20,0,10); root.addView(sub)
-
         repo.getPlaylists().forEach { p -> btn(p.name, "list") { repo.setActivePlaylist(p.id); loadData(p); drawerLayout?.closeDrawers() } }
     }
 
@@ -203,51 +254,6 @@ class MainActivity : AppCompatActivity() {
     
     private fun showWelcomeDialog() {
         AlertDialog.Builder(this).setTitle("Welcome").setMessage("Add Playlist").setPositiveButton("URL") { _,_ -> showAddUrlDialog() }.setNegativeButton("File") { _,_ -> openFilePicker() }.show()
-    }
-
-    // --- MAGIC REDIRECT RESOLVER ---
-    // Finds the REAL url hidden behind redirects (ramkumar -> krishna -> novst3)
-    private suspend fun resolveRedirects(url: String): String {
-        return withContext(Dispatchers.IO) {
-            try {
-                val req = Request.Builder().url(url).head().header("User-Agent", "TiviMate/4.7.0").build()
-                val resp = resolverClient.newCall(req).execute()
-                val finalUrl = resp.request.url.toString()
-                resp.close()
-                // If the redirect script points to http://... use that directly
-                return@withContext finalUrl
-            } catch (e: Exception) {
-                return@withContext url // Return original if fail
-            }
-        }
-    }
-
-    private fun play(c: Channel) {
-        lifecycleScope.launch {
-            try {
-                currentChannel = c
-                repo.addRecent(c)
-                updateRecentList()
-                
-                // Show loading indicator?
-                Toast.makeText(this@MainActivity, "Resolving Stream...", Toast.LENGTH_SHORT).show()
-                
-                // --- STEP 1: RESOLVE THE REAL URL ---
-                val realUrl = resolveRedirects(c.url)
-                
-                // --- STEP 2: PLAY THE REAL URL ---
-                val builder = MediaItem.Builder().setUri(Uri.parse(realUrl))
-                if (c.drmLicense != null) builder.setDrmConfiguration(DrmConfiguration.Builder(androidx.media3.common.C.WIDEVINE_UUID).setLicenseUri(c.drmLicense).build())
-                
-                player?.setMediaItem(builder.build())
-                player?.prepare()
-                player?.play()
-                
-                epgContainer?.visibility = View.GONE
-            } catch (e: Exception) { 
-                Toast.makeText(this@MainActivity, "Error: ${e.message}", Toast.LENGTH_SHORT).show() 
-            }
-        }
     }
 
     private fun updateRecentList() {
@@ -326,12 +332,8 @@ class MainActivity : AppCompatActivity() {
                 KeyEvent.KEYCODE_DPAD_RIGHT -> { 
                     drawerLayout?.openDrawer(Gravity.END)
                     updateSettingsDrawer()
-                    // CRITICAL FIX: FORCE FOCUS ON SETTINGS
                     val root = findViewById<LinearLayout>(R.id.settingsDrawer)
-                    root?.postDelayed({
-                        val firstBtn = root.findViewWithTag<View>("first")
-                        firstBtn?.requestFocus()
-                    }, 100)
+                    root?.postDelayed({ root.findViewWithTag<View>("first")?.requestFocus() }, 100)
                     return true 
                 }
                 KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_MENU -> {
