@@ -37,6 +37,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.net.CookieHandler
+import java.net.CookieManager
+import java.net.CookiePolicy
 import java.util.concurrent.TimeUnit
 
 class MainActivity : AppCompatActivity() {
@@ -51,7 +54,7 @@ class MainActivity : AppCompatActivity() {
     private var rvSearchResults: RecyclerView? = null
     private var tvSearchCount: TextView? = null
 
-    // NEW: Channel Info Overlay
+    // NEW: Channel Info Overlay TextView
     private var tvChannelInfo: TextView? = null
 
     private lateinit var repo: Repository
@@ -62,11 +65,12 @@ class MainActivity : AppCompatActivity() {
     private val handler = Handler(Looper.getMainLooper())
     private val PICK_FILE = 101
 
+    // --- ROBUST RESOLVER CLIENT ---
     private val resolverClient = OkHttpClient.Builder()
         .followRedirects(true)
         .followSslRedirects(true)
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(10, TimeUnit.SECONDS)
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
         .build()
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -75,14 +79,20 @@ class MainActivity : AppCompatActivity() {
         // 1. KEEP SCREEN ON (Prevents screen from turning off while watching)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
+        // NUCLEAR BYPASS
         val policy = StrictMode.ThreadPolicy.Builder().permitAll().build()
         StrictMode.setThreadPolicy(policy)
+
+        // COOKIE MANAGER
+        val cookieManager = CookieManager()
+        cookieManager.setCookiePolicy(CookiePolicy.ACCEPT_ORIGINAL_SERVER)
+        CookieHandler.setDefault(cookieManager)
         
         try {
             setContentView(R.layout.activity_main)
             repo = Repository(this)
             
-            // 2. SETUP CHANNEL INFO OVERLAY (Programmatically added to ensure it exists)
+            // 2. SETUP CHANNEL INFO OVERLAY
             setupChannelInfoOverlay()
 
             initializePlayer()
@@ -109,17 +119,18 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // NEW FUNCTION: Creates the Bottom-Left Channel Info Text
+    // NEW FUNCTION: Initialize the overlay text view programmatically
     private fun setupChannelInfoOverlay() {
         val root = findViewById<FrameLayout>(android.R.id.content) ?: return
         
         tvChannelInfo = TextView(this).apply {
             setTextColor(Color.WHITE)
-            textSize = 24f
+            textSize = 24f // Large readable text
             setTypeface(null, Typeface.BOLD)
-            setBackgroundColor(Color.parseColor("#B3000000")) // Semi-transparent black
-            setPadding(30, 20, 50, 20)
-            visibility = View.GONE
+            setShadowLayer(4f, 2f, 2f, Color.BLACK) // Text shadow for better visibility
+            setBackgroundColor(Color.parseColor("#80000000")) // Semi-transparent background
+            setPadding(32, 16, 32, 16)
+            visibility = View.GONE // Hidden by default
         }
 
         val params = FrameLayout.LayoutParams(
@@ -127,19 +138,19 @@ class MainActivity : AppCompatActivity() {
             FrameLayout.LayoutParams.WRAP_CONTENT
         ).apply {
             gravity = Gravity.BOTTOM or Gravity.START
-            setMargins(40, 0, 0, 40) // Left and Bottom margin
+            setMargins(40, 0, 0, 40) // Bottom Left positioning
         }
 
         addContentView(tvChannelInfo, params)
     }
 
-    // NEW FUNCTION: Shows the info and auto-hides it
+    // NEW FUNCTION: Show channel info and auto-hide
     private fun showChannelInfo(c: Channel) {
         tvChannelInfo?.apply {
             text = "${c.number}. ${c.name}"
             visibility = View.VISIBLE
             
-            // Remove old hide commands and schedule a new one
+            // Remove any pending hide callbacks and post a new one
             handler.removeCallbacksAndMessages("HIDE_INFO")
             handler.postAtTime({
                 visibility = View.GONE
@@ -148,6 +159,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun initializePlayer() {
+        // --- PLAYER CONFIG ---
         val httpFactory = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
             .setUserAgent("TiviMate/4.7.0") 
@@ -165,24 +177,28 @@ class MainActivity : AppCompatActivity() {
         playerView?.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL
     }
 
+    // --- UPDATED RESOLVER: ONLY USE GET (Head removed) ---
     private suspend fun resolveRedirects(url: String): String {
         return withContext(Dispatchers.IO) {
+            // Optimization: Skip valid static files
+            if ((url.contains(".ts") || url.contains(".m3u8")) && !url.contains(".php") && !url.contains("fake=")) {
+                return@withContext url
+            }
+
+            // DIRECTLY TRY GET (No HEAD attempt)
             try {
-                if (url.contains(".ts") || url.contains(".m3u8") && !url.contains(".php")) {
-                    return@withContext url
-                }
-                
-                val req = Request.Builder()
+                val reqGet = Request.Builder()
                     .url(url)
-                    .head()
+                    .get()
                     .header("User-Agent", "TiviMate/4.7.0")
                     .build()
                     
-                val resp = resolverClient.newCall(req).execute()
+                val resp = resolverClient.newCall(reqGet).execute()
                 val finalUrl = resp.request.url.toString()
                 resp.close()
                 return@withContext finalUrl
             } catch (e: Exception) {
+                // If fail, return original URL
                 return@withContext url
             }
         }
@@ -194,12 +210,14 @@ class MainActivity : AppCompatActivity() {
                 currentChannel = c
                 repo.addRecent(c)
                 updateRecentList()
-
-                // 3. SHOW CHANNEL INFO ON SCREEN
+                
+                // 3. SHOW INFO OVERLAY
                 showChannelInfo(c)
-
+                
+                // 1. RESOLVE THE URL (Direct GET)
                 val realUrl = resolveRedirects(c.url)
                 
+                // 2. FORCE HLS MIME TYPE
                 val builder = MediaItem.Builder()
                     .setUri(Uri.parse(realUrl))
                     .setMimeType(MimeTypes.APPLICATION_M3U8) 
@@ -214,11 +232,12 @@ class MainActivity : AppCompatActivity() {
                 
                 epgContainer?.visibility = View.GONE
             } catch (e: Exception) { 
-                Toast.makeText(this@MainActivity, "Error: ${e.message}", Toast.LENGTH_SHORT).show() 
+                Toast.makeText(this@MainActivity, "Playback Error: ${e.message}", Toast.LENGTH_SHORT).show() 
             }
         }
     }
     
+    // --- UI HELPERS ---
     private fun showError(title: String, msg: String) {
         AlertDialog.Builder(this).setTitle(title).setMessage(msg).setPositiveButton("Close") { _, _ -> }.show()
     }
@@ -255,7 +274,10 @@ class MainActivity : AppCompatActivity() {
         
         fun btn(t: String, tag: String, a: () -> Unit) {
             val b = Button(this); b.text = t; b.tag = tag; b.setTextColor(Color.WHITE)
-            b.setBackgroundResource(android.R.drawable.btn_default); b.isFocusable = true; b.setOnClickListener { a() }
+            b.setBackgroundResource(android.R.drawable.btn_default)
+            b.isFocusable = true
+            b.isFocusableInTouchMode = true
+            b.setOnClickListener { a() }
             root.addView(b)
         }
         
