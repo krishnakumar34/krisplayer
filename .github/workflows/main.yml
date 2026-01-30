@@ -1,4 +1,4 @@
-name: Build TiviMate Pro V8 (Bootstrap)
+name: Build TiviMate Pro V9 (Final)
 
 on: [push, workflow_dispatch]
 
@@ -12,36 +12,21 @@ jobs:
 
     - name: Build APK
       run: |
-        # =========================================================
-        # STEP 1: BOOTSTRAP (Prevents 'HasConvention' Error)
-        # =========================================================
-        # We must ensure no complex build files exist when we generate the wrapper.
+        # 1. Clean Start
         rm -f build.gradle settings.gradle gradle.properties
 
-        # Create a dummy settings file so Gradle knows this is a project root
-        echo "rootProject.name = 'TiviClone'" > settings.gradle
-
-        # Generate the Gradle 8.2 wrapper using the system Gradle
-        # Because the folder is "clean", this will NOT crash.
-        gradle wrapper --gradle-version 8.2
-        chmod +x gradlew
-
-        # =========================================================
-        # STEP 2: FILE PREPARATION
-        # =========================================================
-        # Create standard Android directory structure
+        # 2. Prepare Directories
         mkdir -p app/src/main/java/com/iptv/player
         mkdir -p app/src/main/res/{layout,values,drawable,xml}
         
-        # Move YOUR existing Kotlin files to the correct package
-        # (This respects your code and does not overwrite it)
+        # 3. Move Kotlin Code
         mv *.kt app/src/main/java/com/iptv/player/ || true
 
-        # =========================================================
-        # STEP 3: GENERATE CONFIGURATION (HTTP & REDIRECT FIXES)
-        # =========================================================
+        # 4. Generate Wrapper (Safe Mode)
+        gradle wrapper --gradle-version 8.2
+        chmod +x gradlew
         
-        # 1. Network Security Config (Allows HTTP streams)
+        # 5. Network Config (Allow ALL HTTP)
         cat <<EOF > app/src/main/res/xml/network_security_config.xml
         <?xml version="1.0" encoding="utf-8"?>
         <network-security-config>
@@ -54,17 +39,15 @@ jobs:
         </network-security-config>
         EOF
 
-        # 2. Android Manifest (Links Network Config)
+        # 6. Manifest (Correctly Linked)
         cat <<EOF > app/src/main/AndroidManifest.xml
         <?xml version="1.0" encoding="utf-8"?>
         <manifest xmlns:android="http://schemas.android.com/apk/res/android">
             <uses-permission android:name="android.permission.INTERNET" />
             <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
             <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-            
             <uses-feature android:name="android.software.leanback" android:required="false" />
             <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
-            
             <application
                 android:allowBackup="true"
                 android:label="TiviClone Pro"
@@ -72,35 +55,24 @@ jobs:
                 android:requestLegacyExternalStorage="true"
                 android:usesCleartextTraffic="true"
                 android:theme="@style/Theme.AppCompat.NoActionBar">
-                
                 <activity android:name=".MainActivity" android:exported="true"
                     android:screenOrientation="sensorLandscape"
                     android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenSize">
-                    <intent-filter>
-                        <action android:name="android.intent.action.MAIN" />
-                        <category android:name="android.intent.category.LAUNCHER" />
-                        <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
-                    </intent-filter>
+                    <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /><category android:name="android.intent.category.LEANBACK_LAUNCHER" /></intent-filter>
                 </activity>
             </application>
         </manifest>
         EOF
 
-        # =========================================================
-        # STEP 4: GENERATE BUILD FILES
-        # =========================================================
-        
-        # gradle.properties
+        # 7. Generate Build Configs
         cat <<EOF > gradle.properties
         android.useAndroidX=true
         android.enableJetifier=true
         org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
         EOF
 
-        # settings.gradle (Refresh)
         echo "include ':app'" > settings.gradle
 
-        # Root build.gradle
         cat <<EOF > build.gradle
         buildscript {
             repositories { google(); mavenCentral() }
@@ -110,7 +82,6 @@ jobs:
         task clean(type: Delete) { delete rootProject.buildDir }
         EOF
 
-        # App build.gradle
         cat <<EOF > app/build.gradle
         plugins { id 'com.android.application'; id 'org.jetbrains.kotlin.android' }
         android {
@@ -136,11 +107,7 @@ jobs:
         }
         EOF
 
-        # =========================================================
-        # STEP 5: GENERATE RESOURCES (UI)
-        # =========================================================
-
-        # Colors
+        # 8. Generate Resources
         cat <<EOF > app/src/main/res/values/colors.xml
         <?xml version="1.0" encoding="utf-8"?>
         <resources>
@@ -154,7 +121,6 @@ jobs:
         </resources>
         EOF
 
-        # Selector
         cat <<EOF > app/src/main/res/drawable/selector_item.xml
         <?xml version="1.0" encoding="utf-8"?>
         <selector xmlns:android="http://schemas.android.com/apk/res/android">
@@ -163,7 +129,6 @@ jobs:
         </selector>
         EOF
 
-        # Main Layout
         cat <<EOF > app/src/main/res/layout/activity_main.xml
         <?xml version="1.0" encoding="utf-8"?>
         <androidx.drawerlayout.widget.DrawerLayout xmlns:android="http://schemas.android.com/apk/res/android"
@@ -197,7 +162,6 @@ jobs:
         </androidx.drawerlayout.widget.DrawerLayout>
         EOF
 
-        # Channel Layout
         cat <<EOF > app/src/main/res/layout/item_channel.xml
         <?xml version="1.0" encoding="utf-8"?>
         <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="60dp" android:orientation="horizontal" android:paddingBottom="2dp" android:baselineAligned="false">
@@ -210,7 +174,6 @@ jobs:
         </LinearLayout>
         EOF
 
-        # Program Layout
         cat <<EOF > app/src/main/res/layout/item_program.xml
         <?xml version="1.0" encoding="utf-8"?>
         <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="200dp" android:layout_height="match_parent" android:orientation="vertical" android:background="@drawable/selector_item" android:padding="6dp" android:layout_marginEnd="2dp" android:focusable="true" android:clickable="true">
@@ -219,10 +182,7 @@ jobs:
         </LinearLayout>
         EOF
 
-        # =========================================================
-        # STEP 6: RUN BUILD
-        # =========================================================
-        # We use the wrapper we generated in Step 1 (which now safely points to 8.2)
+        # 9. Run Build
         ./gradlew assembleDebug
 
     - uses: actions/upload-artifact@v4
