@@ -28,7 +28,12 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import java.util.concurrent.TimeUnit
 
 class MainActivity : AppCompatActivity() {
     private var player: ExoPlayer? = null
@@ -49,11 +54,19 @@ class MainActivity : AppCompatActivity() {
     private var numBuffer = ""
     private val handler = Handler(Looper.getMainLooper())
     private val PICK_FILE = 101
+    
+    // --- REDIRECT SOLVER CLIENT ---
+    private val resolverClient = OkHttpClient.Builder()
+        .followRedirects(true)
+        .followSslRedirects(true)
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(10, TimeUnit.SECONDS)
+        .build()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // NUCLEAR BYPASS: Allow all network operations on main thread (fixes some strict redirect issues)
+        // NUCLEAR BYPASS: Fixes android.os.NetworkOnMainThreadException during strict redirects
         val policy = StrictMode.ThreadPolicy.Builder().permitAll().build()
         StrictMode.setThreadPolicy(policy)
         
@@ -86,11 +99,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun initializePlayer() {
-        // --- FIX FOR HTTPS -> HTTP REDIRECTS ---
+        // --- PLAYER CONFIG FOR HTTPS -> HTTP ---
         val httpFactory = DefaultHttpDataSource.Factory()
-            .setAllowCrossProtocolRedirects(true) // CRITICAL: Allows PHP (https) -> Stream (http)
-            .setUserAgent("TiviMate/4.7.0") // Spoof User-Agent
-            .setConnectTimeoutMs(15000) // Longer timeout for slow redirects
+            .setAllowCrossProtocolRedirects(true)
+            .setUserAgent("TiviMate/4.7.0")
+            .setConnectTimeoutMs(15000)
             .setReadTimeoutMs(15000)
         
         val dataSourceFactory = DefaultDataSource.Factory(this, httpFactory)
@@ -101,7 +114,7 @@ class MainActivity : AppCompatActivity() {
             
         val playerView = findViewById<PlayerView>(R.id.playerView)
         playerView?.player = player
-        playerView?.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL // Remove black bars
+        playerView?.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL
     }
 
     private fun showError(title: String, msg: String) {
@@ -142,10 +155,10 @@ class MainActivity : AppCompatActivity() {
         fun btn(t: String, tag: String, a: () -> Unit) {
             val b = Button(this)
             b.text = t
-            b.tag = tag // Tag to identify for focus
+            b.tag = tag 
             b.setTextColor(Color.WHITE)
             b.setBackgroundResource(android.R.drawable.btn_default)
-            b.isFocusable = true // CRITICAL: Allow TV Remote Focus
+            b.isFocusable = true
             b.isFocusableInTouchMode = true
             b.setOnClickListener { a() }
             root.addView(b)
@@ -192,21 +205,49 @@ class MainActivity : AppCompatActivity() {
         AlertDialog.Builder(this).setTitle("Welcome").setMessage("Add Playlist").setPositiveButton("URL") { _,_ -> showAddUrlDialog() }.setNegativeButton("File") { _,_ -> openFilePicker() }.show()
     }
 
+    // --- MAGIC REDIRECT RESOLVER ---
+    // Finds the REAL url hidden behind redirects (ramkumar -> krishna -> novst3)
+    private suspend fun resolveRedirects(url: String): String {
+        return withContext(Dispatchers.IO) {
+            try {
+                val req = Request.Builder().url(url).head().header("User-Agent", "TiviMate/4.7.0").build()
+                val resp = resolverClient.newCall(req).execute()
+                val finalUrl = resp.request.url.toString()
+                resp.close()
+                // If the redirect script points to http://... use that directly
+                return@withContext finalUrl
+            } catch (e: Exception) {
+                return@withContext url // Return original if fail
+            }
+        }
+    }
+
     private fun play(c: Channel) {
-        try {
-            currentChannel = c
-            repo.addRecent(c)
-            updateRecentList()
-            
-            val builder = MediaItem.Builder().setUri(Uri.parse(c.url))
-            if (c.drmLicense != null) builder.setDrmConfiguration(DrmConfiguration.Builder(androidx.media3.common.C.WIDEVINE_UUID).setLicenseUri(c.drmLicense).build())
-            
-            player?.setMediaItem(builder.build())
-            player?.prepare()
-            player?.play()
-            
-            epgContainer?.visibility = View.GONE
-        } catch (e: Exception) { Toast.makeText(this, "Playback Error: ${e.message}", Toast.LENGTH_SHORT).show() }
+        lifecycleScope.launch {
+            try {
+                currentChannel = c
+                repo.addRecent(c)
+                updateRecentList()
+                
+                // Show loading indicator?
+                Toast.makeText(this@MainActivity, "Resolving Stream...", Toast.LENGTH_SHORT).show()
+                
+                // --- STEP 1: RESOLVE THE REAL URL ---
+                val realUrl = resolveRedirects(c.url)
+                
+                // --- STEP 2: PLAY THE REAL URL ---
+                val builder = MediaItem.Builder().setUri(Uri.parse(realUrl))
+                if (c.drmLicense != null) builder.setDrmConfiguration(DrmConfiguration.Builder(androidx.media3.common.C.WIDEVINE_UUID).setLicenseUri(c.drmLicense).build())
+                
+                player?.setMediaItem(builder.build())
+                player?.prepare()
+                player?.play()
+                
+                epgContainer?.visibility = View.GONE
+            } catch (e: Exception) { 
+                Toast.makeText(this@MainActivity, "Error: ${e.message}", Toast.LENGTH_SHORT).show() 
+            }
+        }
     }
 
     private fun updateRecentList() {
