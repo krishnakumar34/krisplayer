@@ -35,6 +35,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.net.CookieHandler
+import java.net.CookieManager
+import java.net.CookiePolicy
 import java.util.concurrent.TimeUnit
 
 class MainActivity : AppCompatActivity() {
@@ -57,12 +60,12 @@ class MainActivity : AppCompatActivity() {
     private val handler = Handler(Looper.getMainLooper())
     private val PICK_FILE = 101
 
-    // --- MANUAL RESOLVER CLIENT (The Fix for Ramkumar/Redirects) ---
+    // --- ROBUST RESOLVER CLIENT ---
     private val resolverClient = OkHttpClient.Builder()
         .followRedirects(true)
         .followSslRedirects(true)
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(10, TimeUnit.SECONDS)
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
         .build()
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -71,6 +74,11 @@ class MainActivity : AppCompatActivity() {
         // NUCLEAR BYPASS
         val policy = StrictMode.ThreadPolicy.Builder().permitAll().build()
         StrictMode.setThreadPolicy(policy)
+
+        // COOKIE MANAGER
+        val cookieManager = CookieManager()
+        cookieManager.setCookiePolicy(CookiePolicy.ACCEPT_ORIGINAL_SERVER)
+        CookieHandler.setDefault(cookieManager)
         
         try {
             setContentView(R.layout.activity_main)
@@ -101,6 +109,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun initializePlayer() {
+        // --- PLAYER CONFIG ---
         val httpFactory = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
             .setUserAgent("TiviMate/4.7.0") 
@@ -118,41 +127,63 @@ class MainActivity : AppCompatActivity() {
         playerView?.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL
     }
 
-    // --- THE "RESOLVE STREAM" FUNCTION IS BACK ---
+    // --- SMART HYBRID RESOLVER (HEAD -> Fallback to GET) ---
     private suspend fun resolveRedirects(url: String): String {
         return withContext(Dispatchers.IO) {
+            // Optimization: Skip valid static files
+            if ((url.contains(".ts") || url.contains(".m3u8")) && !url.contains(".php") && !url.contains("fake=")) {
+                return@withContext url
+            }
+
+            // ATTEMPT 1: TRY HEAD (Preferred)
+            // It is faster and works for most redirects without downloading the body.
             try {
-                // If it's already an IP address or simple link, skip resolving to save time
-                if (url.contains(".ts") || url.contains(".m3u8") && !url.contains(".php")) {
-                    return@withContext url
-                }
-                
-                val req = Request.Builder()
+                val reqHead = Request.Builder()
                     .url(url)
-                    .head() // Use HEAD to check headers without downloading
+                    .head()
+                    .header("User-Agent", "TiviMate/4.7.0")
+                    .build()
+                
+                val resp = resolverClient.newCall(reqHead).execute()
+                if (resp.isSuccessful || resp.isRedirect) {
+                    val finalUrl = resp.request.url.toString()
+                    resp.close()
+                    return@withContext finalUrl
+                }
+                resp.close()
+                // If HEAD returns an error code (like 405 Method Not Allowed), fall through to GET
+            } catch (e: Exception) {
+                // If HEAD fails (network error or crash), just swallow error and try GET
+            }
+
+            // ATTEMPT 2: TRY GET (Fallback)
+            // Robust method that mimics a browser fully.
+            try {
+                val reqGet = Request.Builder()
+                    .url(url)
+                    .get()
                     .header("User-Agent", "TiviMate/4.7.0")
                     .build()
                     
-                val resp = resolverClient.newCall(req).execute()
+                val resp = resolverClient.newCall(reqGet).execute()
                 val finalUrl = resp.request.url.toString()
                 resp.close()
                 return@withContext finalUrl
             } catch (e: Exception) {
+                // If both fail, return original URL
                 return@withContext url
             }
         }
     }
 
     private fun play(c: Channel) {
-        // Must use lifecycleScope to run the Resolver
         lifecycleScope.launch {
             try {
                 currentChannel = c
                 repo.addRecent(c)
                 updateRecentList()
-
-                // 1. RESOLVE THE URL MANUALLY FIRST
-                // This turns "https://ramkumar..." into "http://novst3..." BEFORE the player sees it
+                
+                // 1. RESOLVE THE URL (Smart Hybrid: HEAD -> GET)
                 val realUrl = resolveRedirects(c.url)
                 
                 // 2. FORCE HLS MIME TYPE
@@ -170,7 +201,7 @@ class MainActivity : AppCompatActivity() {
                 
                 epgContainer?.visibility = View.GONE
             } catch (e: Exception) { 
-                Toast.makeText(this@MainActivity, "Error: ${e.message}", Toast.LENGTH_SHORT).show() 
+                Toast.makeText(this@MainActivity, "Playback Error: ${e.message}", Toast.LENGTH_SHORT).show() 
             }
         }
     }
@@ -212,7 +243,10 @@ class MainActivity : AppCompatActivity() {
         
         fun btn(t: String, tag: String, a: () -> Unit) {
             val b = Button(this); b.text = t; b.tag = tag; b.setTextColor(Color.WHITE)
-            b.setBackgroundResource(android.R.drawable.btn_default); b.isFocusable = true; b.setOnClickListener { a() }
+            b.setBackgroundResource(android.R.drawable.btn_default)
+            b.isFocusable = true
+            b.isFocusableInTouchMode = true
+            b.setOnClickListener { a() }
             root.addView(b)
         }
         
