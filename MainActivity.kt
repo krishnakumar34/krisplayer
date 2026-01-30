@@ -54,7 +54,7 @@ class MainActivity : AppCompatActivity() {
     private var rvSearchResults: RecyclerView? = null
     private var tvSearchCount: TextView? = null
 
-    // NEW: Channel Info Overlay TextView
+    // NEW: Channel Info Overlay
     private var tvChannelInfo: TextView? = null
 
     private lateinit var repo: Repository
@@ -69,14 +69,14 @@ class MainActivity : AppCompatActivity() {
     private val resolverClient = OkHttpClient.Builder()
         .followRedirects(true)
         .followSslRedirects(true)
-        .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
         .build()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // 1. KEEP SCREEN ON (Prevents screen from turning off while watching)
+        // 1. KEEP SCREEN ON (Prevents screen from turning off)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         // NUCLEAR BYPASS
@@ -92,7 +92,7 @@ class MainActivity : AppCompatActivity() {
             setContentView(R.layout.activity_main)
             repo = Repository(this)
             
-            // 2. SETUP CHANNEL INFO OVERLAY
+            // 2. SETUP OVERLAY
             setupChannelInfoOverlay()
 
             initializePlayer()
@@ -119,18 +119,18 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // NEW FUNCTION: Initialize the overlay text view programmatically
+    // NEW: Create the overlay programmatically
     private fun setupChannelInfoOverlay() {
         val root = findViewById<FrameLayout>(android.R.id.content) ?: return
         
         tvChannelInfo = TextView(this).apply {
             setTextColor(Color.WHITE)
-            textSize = 24f // Large readable text
+            textSize = 24f
             setTypeface(null, Typeface.BOLD)
-            setShadowLayer(4f, 2f, 2f, Color.BLACK) // Text shadow for better visibility
-            setBackgroundColor(Color.parseColor("#80000000")) // Semi-transparent background
+            setShadowLayer(4f, 2f, 2f, Color.BLACK)
+            setBackgroundColor(Color.parseColor("#80000000"))
             setPadding(32, 16, 32, 16)
-            visibility = View.GONE // Hidden by default
+            visibility = View.GONE
         }
 
         val params = FrameLayout.LayoutParams(
@@ -138,33 +138,30 @@ class MainActivity : AppCompatActivity() {
             FrameLayout.LayoutParams.WRAP_CONTENT
         ).apply {
             gravity = Gravity.BOTTOM or Gravity.START
-            setMargins(40, 0, 0, 40) // Bottom Left positioning
+            setMargins(40, 0, 0, 40)
         }
 
         addContentView(tvChannelInfo, params)
     }
 
-    // NEW FUNCTION: Show channel info and auto-hide
+    // NEW: Display info for 4 seconds
     private fun showChannelInfo(c: Channel) {
         tvChannelInfo?.apply {
             text = "${c.number}. ${c.name}"
             visibility = View.VISIBLE
-            
-            // Remove any pending hide callbacks and post a new one
             handler.removeCallbacksAndMessages("HIDE_INFO")
             handler.postAtTime({
                 visibility = View.GONE
-            }, "HIDE_INFO", android.os.SystemClock.uptimeMillis() + 4000) // 4 seconds
+            }, "HIDE_INFO", android.os.SystemClock.uptimeMillis() + 4000)
         }
     }
 
     private fun initializePlayer() {
-        // --- PLAYER CONFIG ---
         val httpFactory = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
             .setUserAgent("TiviMate/4.7.0") 
-            .setConnectTimeoutMs(30000)
-            .setReadTimeoutMs(30000)
+            .setConnectTimeoutMs(15000)
+            .setReadTimeoutMs(15000)
         
         val dataSourceFactory = DefaultDataSource.Factory(this, httpFactory)
         
@@ -177,28 +174,26 @@ class MainActivity : AppCompatActivity() {
         playerView?.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL
     }
 
-    // --- UPDATED RESOLVER: ONLY USE GET (Head removed) ---
+    // --- UPDATED RESOLVER: GET ONLY (Fixes 45.135... issue) ---
     private suspend fun resolveRedirects(url: String): String {
         return withContext(Dispatchers.IO) {
-            // Optimization: Skip valid static files
-            if ((url.contains(".ts") || url.contains(".m3u8")) && !url.contains(".php") && !url.contains("fake=")) {
-                return@withContext url
-            }
-
-            // DIRECTLY TRY GET (No HEAD attempt)
             try {
-                val reqGet = Request.Builder()
+                if ((url.contains(".ts") || url.contains(".m3u8")) && !url.contains(".php") && !url.contains("fake=")) {
+                    return@withContext url
+                }
+
+                // USE GET (Removed HEAD as requested)
+                val req = Request.Builder()
                     .url(url)
                     .get()
                     .header("User-Agent", "TiviMate/4.7.0")
                     .build()
-                    
-                val resp = resolverClient.newCall(reqGet).execute()
+                
+                val resp = resolverClient.newCall(req).execute()
                 val finalUrl = resp.request.url.toString()
                 resp.close()
                 return@withContext finalUrl
             } catch (e: Exception) {
-                // If fail, return original URL
                 return@withContext url
             }
         }
@@ -211,16 +206,20 @@ class MainActivity : AppCompatActivity() {
                 repo.addRecent(c)
                 updateRecentList()
                 
-                // 3. SHOW INFO OVERLAY
+                // 3. SHOW OVERLAY
                 showChannelInfo(c)
                 
-                // 1. RESOLVE THE URL (Direct GET)
+                // 1. RESOLVE
                 val realUrl = resolveRedirects(c.url)
                 
-                // 2. FORCE HLS MIME TYPE
-                val builder = MediaItem.Builder()
-                    .setUri(Uri.parse(realUrl))
-                    .setMimeType(MimeTypes.APPLICATION_M3U8) 
+                val builder = MediaItem.Builder().setUri(Uri.parse(realUrl))
+                
+                // 4. FIX FOR "45.135..." LINKS:
+                // Only force M3U8 if it is explicitly a playlist or PHP script.
+                // If it is a raw stream (like /2739), do NOT force M3U8, let ExoPlayer detect TS.
+                if (realUrl.contains(".m3u8") || realUrl.contains(".php")) {
+                    builder.setMimeType(MimeTypes.APPLICATION_M3U8)
+                }
                 
                 if (c.drmLicense != null) {
                     builder.setDrmConfiguration(DrmConfiguration.Builder(C.WIDEVINE_UUID).setLicenseUri(c.drmLicense).build())
@@ -232,7 +231,7 @@ class MainActivity : AppCompatActivity() {
                 
                 epgContainer?.visibility = View.GONE
             } catch (e: Exception) { 
-                Toast.makeText(this@MainActivity, "Playback Error: ${e.message}", Toast.LENGTH_SHORT).show() 
+                Toast.makeText(this@MainActivity, "Error: ${e.message}", Toast.LENGTH_SHORT).show() 
             }
         }
     }
