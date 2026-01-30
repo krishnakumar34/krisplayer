@@ -69,8 +69,8 @@ class MainActivity : AppCompatActivity() {
     private val resolverClient = OkHttpClient.Builder()
         .followRedirects(true)
         .followSslRedirects(true)
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(15, TimeUnit.SECONDS)
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
         .build()
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -163,8 +163,8 @@ class MainActivity : AppCompatActivity() {
         val httpFactory = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
             .setUserAgent("TiviMate/4.7.0") 
-            .setConnectTimeoutMs(15000)
-            .setReadTimeoutMs(15000)
+            .setConnectTimeoutMs(30000)
+            .setReadTimeoutMs(30000)
         
         val dataSourceFactory = DefaultDataSource.Factory(this, httpFactory)
         
