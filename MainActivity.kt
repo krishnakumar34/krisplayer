@@ -87,7 +87,7 @@ class MainActivity : AppCompatActivity() {
     private fun initializePlayer() {
         val httpFactory = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true) // Fix Redirects
-            .setUserAgent("TiviMate/4.7.0")
+            //.setUserAgent("TiviMate/4.7.0")
             .setConnectTimeoutMs(8000)
             .setReadTimeoutMs(8000)
         
