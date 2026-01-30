@@ -35,6 +35,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.net.CookieHandler
+import java.net.CookieManager
+import java.net.CookiePolicy
 import java.util.concurrent.TimeUnit
 
 class MainActivity : AppCompatActivity() {
@@ -57,20 +60,26 @@ class MainActivity : AppCompatActivity() {
     private val handler = Handler(Looper.getMainLooper())
     private val PICK_FILE = 101
 
-    // --- MANUAL RESOLVER CLIENT (The Fix for Ramkumar/Redirects) ---
+    // --- ROBUST RESOLVER CLIENT ---
+    // Handles redirects (https->http) and maintains session for relative URLs
     private val resolverClient = OkHttpClient.Builder()
         .followRedirects(true)
         .followSslRedirects(true)
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(10, TimeUnit.SECONDS)
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
         .build()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // NUCLEAR BYPASS
+        // 1. NUCLEAR BYPASS (Prevents NetworkOnMainThread crash in some strict modes)
         val policy = StrictMode.ThreadPolicy.Builder().permitAll().build()
         StrictMode.setThreadPolicy(policy)
+
+        // 2. COOKIE MANAGER (Critical for some session-based redirects)
+        val cookieManager = CookieManager()
+        cookieManager.setCookiePolicy(CookiePolicy.ACCEPT_ORIGINAL_SERVER)
+        CookieHandler.setDefault(cookieManager)
         
         try {
             setContentView(R.layout.activity_main)
@@ -101,6 +110,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun initializePlayer() {
+        // --- PLAYER CONFIG ---
+        // We set allowCrossProtocolRedirects here as a backup, 
+        // even though our manual resolver does the heavy lifting.
         val httpFactory = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
             .setUserAgent("TiviMate/4.7.0") 
@@ -115,47 +127,57 @@ class MainActivity : AppCompatActivity() {
             
         val playerView = findViewById<PlayerView>(R.id.playerView)
         playerView?.player = player
+        
+        // FIX: Force video to fill screen (Remove black bars)
         playerView?.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL
     }
 
-    // --- THE "RESOLVE STREAM" FUNCTION IS BACK ---
+    // --- CRITICAL FUNCTION: RESOLVE REDIRECTS ---
+    // Fixes "Ramkumar" (https->http) AND "Krishna" (Base URL for relative paths)
     private suspend fun resolveRedirects(url: String): String {
         return withContext(Dispatchers.IO) {
             try {
-                // If it's already an IP address or simple link, skip resolving to save time
-                if (url.contains(".ts") || url.contains(".m3u8") && !url.contains(".php")) {
+                // Optimization: If it's a direct TS/M3U8 link (and NOT PHP/fake), skip logic
+                if ((url.contains(".ts") || url.contains(".m3u8")) && !url.contains(".php") && !url.contains("fake=")) {
                     return@withContext url
                 }
                 
+                // USE GET (Not HEAD): 
+                // GET mimics a real player request, ensuring we follow the chain 
+                // all the way to the final server (e.g., 46.151...).
                 val req = Request.Builder()
                     .url(url)
-                    .head() // Use HEAD to check headers without downloading
+                    .get() 
                     .header("User-Agent", "TiviMate/4.7.0")
                     .build()
                     
                 val resp = resolverClient.newCall(req).execute()
                 val finalUrl = resp.request.url.toString()
+                
+                // Close body immediately (we only need the URL)
                 resp.close()
+                
                 return@withContext finalUrl
             } catch (e: Exception) {
+                // Fallback: If resolving fails, try original URL
                 return@withContext url
             }
         }
     }
 
     private fun play(c: Channel) {
-        // Must use lifecycleScope to run the Resolver
         lifecycleScope.launch {
             try {
                 currentChannel = c
                 repo.addRecent(c)
                 updateRecentList()
-
-                // 1. RESOLVE THE URL MANUALLY FIRST
-                // This turns "https://ramkumar..." into "http://novst3..." BEFORE the player sees it
+                
+                // 1. RESOLVE THE URL
+                // Unwraps redirects to find the "Real" URL
                 val realUrl = resolveRedirects(c.url)
                 
                 // 2. FORCE HLS MIME TYPE
+                // Fixes "Blank Lines" issues by telling Player to ignore PHP extension
                 val builder = MediaItem.Builder()
                     .setUri(Uri.parse(realUrl))
                     .setMimeType(MimeTypes.APPLICATION_M3U8) 
@@ -170,12 +192,19 @@ class MainActivity : AppCompatActivity() {
                 
                 epgContainer?.visibility = View.GONE
             } catch (e: Exception) { 
-                Toast.makeText(this@MainActivity, "Error: ${e.message}", Toast.LENGTH_SHORT).show() 
+                Toast.makeText(this@MainActivity, "Playback Error: ${e.message}", Toast.LENGTH_SHORT).show() 
             }
         }
     }
-    
-    // --- UI HELPERS ---
+
+    private fun updateRecentList() {
+        val recents = repo.getRecents()
+        if (recents.isNotEmpty()) {
+            findViewById<View>(R.id.recentContainer)?.visibility = View.GONE 
+            rvRecents?.adapter = ChannelAdapter(recents, { play(it) }, { toggleFav(it) }, {})
+        }
+    }
+
     private fun showError(title: String, msg: String) {
         AlertDialog.Builder(this).setTitle(title).setMessage(msg).setPositiveButton("Close") { _, _ -> }.show()
     }
@@ -211,8 +240,14 @@ class MainActivity : AppCompatActivity() {
         val title = TextView(this); title.text="SETTINGS"; title.textSize=22f; title.setTextColor(Color.CYAN); root.addView(title)
         
         fun btn(t: String, tag: String, a: () -> Unit) {
-            val b = Button(this); b.text = t; b.tag = tag; b.setTextColor(Color.WHITE)
-            b.setBackgroundResource(android.R.drawable.btn_default); b.isFocusable = true; b.setOnClickListener { a() }
+            val b = Button(this)
+            b.text = t
+            b.tag = tag // Tag for finding view by tag
+            b.setTextColor(Color.WHITE)
+            b.setBackgroundResource(android.R.drawable.btn_default)
+            b.isFocusable = true // CRITICAL: Allow TV Remote Focus
+            b.isFocusableInTouchMode = true
+            b.setOnClickListener { a() }
             root.addView(b)
         }
         
@@ -256,14 +291,6 @@ class MainActivity : AppCompatActivity() {
         AlertDialog.Builder(this).setTitle("Welcome").setMessage("Add Playlist").setPositiveButton("URL") { _,_ -> showAddUrlDialog() }.setNegativeButton("File") { _,_ -> openFilePicker() }.show()
     }
 
-    private fun updateRecentList() {
-        val recents = repo.getRecents()
-        if (recents.isNotEmpty()) {
-            findViewById<View>(R.id.recentContainer)?.visibility = View.GONE 
-            rvRecents?.adapter = ChannelAdapter(recents, { play(it) }, { toggleFav(it) }, {})
-        }
-    }
-
     private fun setupSearchUI() {
         searchContainer = findViewById(R.id.searchContainer)
         etSearch = findViewById(R.id.etSearch)
@@ -295,6 +322,7 @@ class MainActivity : AppCompatActivity() {
     fun focusChannelList() { rvChannels?.requestFocus() }
 
     override fun onKeyDown(k: Int, e: KeyEvent?): Boolean {
+        // NUMBER ZAPPING
         if (k in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9) {
             numBuffer += (k - KeyEvent.KEYCODE_0)
             findViewById<TextView>(R.id.tvOverlayNum)?.let { tv ->
@@ -308,12 +336,13 @@ class MainActivity : AppCompatActivity() {
             return true
         }
 
+        // REMOTE NAVIGATION (When Video is Playing)
         if (epgContainer?.visibility != View.VISIBLE && searchContainer?.visibility != View.VISIBLE) {
             when(k) {
                 KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_CHANNEL_UP -> {
                     currentChannel?.let { curr ->
                         val idx = allChannelsFlat.indexOf(curr)
-                        if (idx > 0) play(allChannelsFlat[idx - 1])
+                        if (idx > 0) play(allChannelsFlat[idx - 1]) // Prev Channel
                     }
                     return true
                 }
@@ -321,9 +350,10 @@ class MainActivity : AppCompatActivity() {
                     if (k == KeyEvent.KEYCODE_CHANNEL_DOWN) {
                         currentChannel?.let { curr ->
                             val idx = allChannelsFlat.indexOf(curr)
-                            if (idx < allChannelsFlat.size - 1) play(allChannelsFlat[idx + 1])
+                            if (idx < allChannelsFlat.size - 1) play(allChannelsFlat[idx + 1]) // Next Channel
                         }
                     } else {
+                        // DPAD DOWN opens Recents Bar
                         findViewById<View>(R.id.recentContainer)?.visibility = View.VISIBLE
                         rvRecents?.requestFocus()
                     }
@@ -332,6 +362,7 @@ class MainActivity : AppCompatActivity() {
                 KeyEvent.KEYCODE_DPAD_RIGHT -> { 
                     drawerLayout?.openDrawer(Gravity.END)
                     updateSettingsDrawer()
+                    // FIX: Force Focus onto first Settings Button
                     val root = findViewById<LinearLayout>(R.id.settingsDrawer)
                     root?.postDelayed({ root.findViewWithTag<View>("first")?.requestFocus() }, 100)
                     return true 
@@ -344,6 +375,7 @@ class MainActivity : AppCompatActivity() {
             }
         } 
         
+        // BACK BUTTON LOGIC
         if (k == KeyEvent.KEYCODE_BACK) {
             if (searchContainer?.visibility == View.VISIBLE) { closeSearch(); return true }
             if (drawerLayout?.isDrawerOpen(Gravity.END) == true) { drawerLayout?.closeDrawers(); return true }
