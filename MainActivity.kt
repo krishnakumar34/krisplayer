@@ -49,7 +49,7 @@ class MainActivity : AppCompatActivity() {
     private var epgContainer: LinearLayout? = null
     private var rvGroups: RecyclerView? = null
     private var rvChannels: RecyclerView? = null
-    private var rvRecents: RecyclerView? = null
+    // Removed rvRecents to fix navigation conflict
     private var searchContainer: LinearLayout? = null
     private var etSearch: EditText? = null
     private var rvSearchResults: RecyclerView? = null
@@ -66,11 +66,11 @@ class MainActivity : AppCompatActivity() {
     private val handler = Handler(Looper.getMainLooper())
     private val PICK_FILE = 101
 
-    // --- ROBUST RESOLVER CLIENT (MPV-Style) ---
+    // --- ROBUST RESOLVER CLIENT ---
     private val resolverClient = OkHttpClient.Builder()
         .followRedirects(true)
         .followSslRedirects(true)
-        .connectTimeout(30, TimeUnit.SECONDS) // 30s Timeout
+        .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .hostnameVerifier { _, _ -> true } 
         .build()
@@ -85,7 +85,7 @@ class MainActivity : AppCompatActivity() {
         val policy = StrictMode.ThreadPolicy.Builder().permitAll().build()
         StrictMode.setThreadPolicy(policy)
 
-        // COOKIE MANAGER (MPV Logic)
+        // COOKIE MANAGER
         val cookieManager = CookieManager()
         cookieManager.setCookiePolicy(CookiePolicy.ACCEPT_ORIGINAL_SERVER)
         CookieHandler.setDefault(cookieManager)
@@ -103,11 +103,10 @@ class MainActivity : AppCompatActivity() {
             epgContainer = findViewById(R.id.epgContainer)
             rvGroups = findViewById(R.id.rvGroups)
             rvChannels = findViewById(R.id.rvChannels)
-            rvRecents = findViewById(R.id.rvRecents)
+            // Removed rvRecents initialization
 
             rvGroups?.layoutManager = LinearLayoutManager(this)
             rvChannels?.layoutManager = LinearLayoutManager(this)
-            rvRecents?.layoutManager = LinearLayoutManager(this, LinearLayoutManager.HORIZONTAL, false)
 
             setupSearchUI()
             updateSettingsDrawer()
@@ -126,10 +125,10 @@ class MainActivity : AppCompatActivity() {
         
         tvChannelInfo = TextView(this).apply {
             setTextColor(Color.WHITE)
-            textSize = 28f 
+            textSize = 28f
             setTypeface(null, Typeface.BOLD)
             setShadowLayer(6f, 3f, 3f, Color.BLACK)
-            setBackgroundColor(Color.parseColor("#99000000")) 
+            setBackgroundColor(Color.parseColor("#99000000"))
             setPadding(40, 20, 60, 20)
             visibility = View.GONE
         }
@@ -156,11 +155,11 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-        private fun initializePlayer() {
+    private fun initializePlayer() {
         val httpFactory = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
             .setUserAgent("TiviMate/4.7.0") 
-            .setConnectTimeoutMs(30000) // 30s Timeout
+            .setConnectTimeoutMs(30000)
             .setReadTimeoutMs(30000)
         
         val dataSourceFactory = DefaultDataSource.Factory(this, httpFactory)
@@ -174,18 +173,16 @@ class MainActivity : AppCompatActivity() {
         playerView?.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL
     }
 
-    // --- MPV RESOLVER: GET ONLY ---
     private suspend fun resolveRedirects(url: String): String {
         return withContext(Dispatchers.IO) {
             try {
-                // Optimization: Skip valid static files
                 if ((url.contains(".ts") || url.contains(".m3u8")) && !url.contains(".php") && !url.contains("fake=")) {
                     return@withContext url
                 }
 
                 val req = Request.Builder()
                     .url(url)
-                    .get() // GET mimics browser/MPV behavior
+                    .get() 
                     .header("User-Agent", "TiviMate/4.7.0")
                     .build()
                 
@@ -194,37 +191,30 @@ class MainActivity : AppCompatActivity() {
                 resp.close()
                 return@withContext finalUrl
             } catch (e: Exception) {
-                return@withContext url // Fail open
+                return@withContext url 
             }
         }
     }
 
-    private fun play(c: Channel) {
+         private fun play(c: Channel) {
         lifecycleScope.launch {
             try {
                 currentChannel = c
                 repo.addRecent(c)
-                updateRecentList()
+                // updateRecentList() - REMOVED per request
                 showChannelInfo(c)
                 
-                // 1. Resolve URL
                 val realUrl = resolveRedirects(c.url)
-                
                 val builder = MediaItem.Builder().setUri(Uri.parse(realUrl))
-                
-                // --- MPV-STYLE MIME TYPE SNIFFING ---
                 val lowerUrl = realUrl.lowercase()
                 
                 if (lowerUrl.contains(".m3u8") || lowerUrl.contains(".php") || lowerUrl.contains("mode=hls")) {
-                    // Force HLS for playlists/scripts
                     builder.setMimeType(MimeTypes.APPLICATION_M3U8)
                 } 
                 else if (lowerUrl.endsWith(".ts") || lowerUrl.endsWith(".mpeg") || lowerUrl.endsWith(".mpg")) {
-                     // Standard MPEG-TS
                     builder.setMimeType(MimeTypes.VIDEO_MP2T)
                 }
                 else if (realUrl.matches(Regex(".*\\/[0-9]+(\\?.*)?$"))) {
-                    // Force TS for extensionless numeric IDs (e.g. .../2739)
                     builder.setMimeType(MimeTypes.VIDEO_MP2T)
                 }
                 
@@ -235,14 +225,13 @@ class MainActivity : AppCompatActivity() {
                 player?.setMediaItem(builder.build())
                 player?.prepare()
                 player?.play()
-                
                 epgContainer?.visibility = View.GONE
             } catch (e: Exception) { 
                 Toast.makeText(this@MainActivity, "Error: ${e.message}", Toast.LENGTH_SHORT).show() 
             }
         }
     }
-
+    
     private fun showError(title: String, msg: String) {
         AlertDialog.Builder(this).setTitle(title).setMessage(msg).setPositiveButton("Close") { _, _ -> }.show()
     }
@@ -254,16 +243,25 @@ class MainActivity : AppCompatActivity() {
                 allData = M3uParser.parse(this@MainActivity, p, repo.getFavIds())
                 allChannelsFlat = allData.values.flatten().distinctBy { it.id }
                 
+                // Clear channel list initially to ensure group selection feels fresh
+                (rvChannels?.adapter as? ChannelAdapter)?.update(emptyList(), rvChannels)
+
                 rvGroups?.adapter = GroupAdapter(allData.keys.toList(), { group ->
+                    // On Group Click: Update Channel List
                     val channels = allData[group] ?: emptyList()
                     (rvChannels?.adapter as? ChannelAdapter)?.update(channels, rvChannels)
+                    
+                    // NAVIGATION FIX: Ensure focus moves correctly if needed, but don't force focus right immediately
+                    // allowing user to scroll groups comfortably.
                 }, { focusChannelList() })
                 
                 if (allData.isNotEmpty()) {
-                    val first = allData.keys.first()
-                    rvChannels?.adapter = ChannelAdapter(allData[first] ?: emptyList(), { play(it) }, { toggleFav(it) }, { focusGroupList() })
+                    // Load first group by default
+                    val firstGroup = allData.keys.first()
+                    val firstChannels = allData[firstGroup] ?: emptyList()
                     
-                    // --- NAVIGATION FIX 1: LOCK FOCUS IN LIST ---
+                    rvChannels?.adapter = ChannelAdapter(firstChannels, { play(it) }, { toggleFav(it) }, { focusGroupList() })
+                    
                     rvChannels?.setOnKeyListener { _, keyCode, event ->
                         if (event.action == KeyEvent.ACTION_DOWN) {
                             if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
@@ -271,15 +269,12 @@ class MainActivity : AppCompatActivity() {
                                 true
                             } else if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
                                 true 
-                            } else {
-                                false 
-                            }
+                            } else false
                         } else false
                     }
 
                     epgContainer?.visibility = View.VISIBLE
                     rvGroups?.requestFocus()
-                    updateRecentList()
                 } else {
                     Toast.makeText(this@MainActivity, "No channels found!", Toast.LENGTH_LONG).show()
                 }
@@ -290,7 +285,11 @@ class MainActivity : AppCompatActivity() {
     private fun updateSettingsDrawer() {
         val root = findViewById<LinearLayout>(R.id.settingsDrawer) ?: return
         root.removeAllViews()
-        val title = TextView(this); title.text="SETTINGS"; title.textSize=22f; title.setTextColor(Color.CYAN); root.addView(title)
+        
+        // FIX: Make Title NON-FOCUSABLE to prevent navigation trap
+        val title = TextView(this); title.text="SETTINGS"; title.textSize=22f; title.setTextColor(Color.CYAN)
+        title.isFocusable = false 
+        root.addView(title)
         
         fun btn(t: String, tag: String, a: () -> Unit) {
             val b = Button(this); b.text = t; b.tag = tag; b.setTextColor(Color.WHITE)
@@ -304,11 +303,16 @@ class MainActivity : AppCompatActivity() {
         btn("+ Add URL Playlist", "other") { showAddUrlDialog() }
         btn("+ Add Local File", "other") { openFilePicker() }
         
-        val sub = TextView(this); sub.text="PLAYLISTS"; sub.textSize=18f; sub.setTextColor(Color.LTGRAY); sub.setPadding(0,20,0,10); root.addView(sub)
+        // FIX: Make Subtitle NON-FOCUSABLE
+        val sub = TextView(this); sub.text="PLAYLISTS"; sub.textSize=18f; sub.setTextColor(Color.LTGRAY); sub.setPadding(0,20,0,10)
+        sub.isFocusable = false
+        root.addView(sub)
+        
         repo.getPlaylists().forEach { p -> btn(p.name, "list") { repo.setActivePlaylist(p.id); loadData(p); drawerLayout?.closeDrawers() } }
     }
 
-    private fun showAddUrlDialog() {
+    .
+        private fun showAddUrlDialog() {
         val input = EditText(this); input.hint = "http://..."; input.setTextColor(Color.WHITE)
         AlertDialog.Builder(this).setTitle("Add URL").setView(input).setPositiveButton("Load") { _,_ ->
             if(input.text.isNotEmpty()) {
@@ -340,14 +344,6 @@ class MainActivity : AppCompatActivity() {
         AlertDialog.Builder(this).setTitle("Welcome").setMessage("Add Playlist").setPositiveButton("URL") { _,_ -> showAddUrlDialog() }.setNegativeButton("File") { _,_ -> openFilePicker() }.show()
     }
 
-    private fun updateRecentList() {
-        val recents = repo.getRecents()
-        if (recents.isNotEmpty()) {
-            findViewById<View>(R.id.recentContainer)?.visibility = View.GONE 
-            rvRecents?.adapter = ChannelAdapter(recents, { play(it) }, { toggleFav(it) }, {})
-        }
-    }
-
     private fun setupSearchUI() {
         searchContainer = findViewById(R.id.searchContainer)
         etSearch = findViewById(R.id.etSearch)
@@ -361,7 +357,6 @@ class MainActivity : AppCompatActivity() {
             override fun onTextChanged(s: CharSequence?, st: Int, b: Int, c: Int) {}
         })
         
-        // --- NAVIGATION FIX 2: SEARCH BUTTON ---
         etSearch?.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == EditorInfo.IME_ACTION_SEARCH || actionId == EditorInfo.IME_ACTION_DONE) {
                 rvSearchResults?.requestFocus()
@@ -408,22 +403,19 @@ class MainActivity : AppCompatActivity() {
 
         if (epgContainer?.visibility != View.VISIBLE && searchContainer?.visibility != View.VISIBLE) {
             when(k) {
+                // FIXED LOGIC: UP = Next Channel (Number Increases)
                 KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_CHANNEL_UP -> {
                     currentChannel?.let { curr ->
                         val idx = allChannelsFlat.indexOf(curr)
-                        if (idx > 0) play(allChannelsFlat[idx - 1])
+                        if (idx < allChannelsFlat.size - 1) play(allChannelsFlat[idx + 1])
                     }
                     return true
                 }
+                // FIXED LOGIC: DOWN = Previous Channel (Number Decreases)
                 KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_CHANNEL_DOWN -> {
-                    if (k == KeyEvent.KEYCODE_CHANNEL_DOWN) {
-                        currentChannel?.let { curr ->
-                            val idx = allChannelsFlat.indexOf(curr)
-                            if (idx < allChannelsFlat.size - 1) play(allChannelsFlat[idx + 1])
-                        }
-                    } else {
-                        findViewById<View>(R.id.recentContainer)?.visibility = View.VISIBLE
-                        rvRecents?.requestFocus()
+                    currentChannel?.let { curr ->
+                        val idx = allChannelsFlat.indexOf(curr)
+                        if (idx > 0) play(allChannelsFlat[idx - 1])
                     }
                     return true
                 }
@@ -453,5 +445,3 @@ class MainActivity : AppCompatActivity() {
     
     override fun onDestroy() { super.onDestroy(); player?.release() }
 }
-
-    
