@@ -1,6 +1,6 @@
 package com.iptv.player
 
-import android.app.Activity  // <--- ADDED THIS BACK TO FIX THE ERROR
+import android.app.Activity // <--- FIXED: Added missing import
 import android.app.AlertDialog
 import android.content.Intent
 import android.graphics.Color
@@ -68,8 +68,8 @@ class MainActivity : AppCompatActivity() {
     private val handler = Handler(Looper.getMainLooper())
     private val PICK_FILE = 101
 
-    // --- NUCLEAR SSL BYPASS (Trust ALL Certificates like MPV) ---
-    private fun getUnsafeOkHttpClient(): OkHttpClient {
+    // --- NUCLEAR SSL BYPASS (Trust ALL Certificates Globally) ---
+    private fun applyGlobalTrustAllSSL() {
         try {
             val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
                 override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
@@ -78,20 +78,23 @@ class MainActivity : AppCompatActivity() {
             })
             val sslContext = SSLContext.getInstance("SSL")
             sslContext.init(null, trustAllCerts, SecureRandom())
-            return OkHttpClient.Builder()
-                .sslSocketFactory(sslContext.socketFactory, trustAllCerts[0] as X509TrustManager)
-                .hostnameVerifier { _, _ -> true }
-                .followRedirects(true)
-                .followSslRedirects(true)
-                .connectTimeout(30, TimeUnit.SECONDS)
-                .readTimeout(30, TimeUnit.SECONDS)
-                .build()
+            
+            // Apply to Global Default (Affects ExoPlayer's DefaultHttpDataSource)
+            HttpsURLConnection.setDefaultSSLSocketFactory(sslContext.socketFactory)
+            HttpsURLConnection.setDefaultHostnameVerifier { _, _ -> true }
         } catch (e: Exception) {
-            throw RuntimeException(e)
+            e.printStackTrace()
         }
     }
     
-    private val resolverClient = getUnsafeOkHttpClient()
+    // Independent Client for Resolver
+    private val resolverClient = OkHttpClient.Builder()
+        .followRedirects(true)
+        .followSslRedirects(true)
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .hostnameVerifier { _, _ -> true }
+        .build()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -103,6 +106,9 @@ class MainActivity : AppCompatActivity() {
         val cookieManager = CookieManager()
         cookieManager.setCookiePolicy(CookiePolicy.ACCEPT_ORIGINAL_SERVER)
         CookieHandler.setDefault(cookieManager)
+        
+        // APPLY GLOBAL SSL BYPASS
+        applyGlobalTrustAllSSL()
         
         try {
             setContentView(R.layout.activity_main)
@@ -155,14 +161,14 @@ class MainActivity : AppCompatActivity() {
             .setBufferDurationsMs(50000, 50000, 2500, 5000)
             .build()
 
-        // 2. ENABLE ICY METADATA + IGNORE CONTENT-TYPE
+        // 2. HTTP FACTORY (Inherits Global SSL Bypass)
         val httpFactory = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
             .setUserAgent("TiviMate/4.7.0") 
             .setConnectTimeoutMs(30000)
             .setReadTimeoutMs(30000)
             .setKeepPostFor302Redirects(true)
-            .setDefaultRequestProperties(mapOf("Icy-MetaData" to "1"))
+            .setDefaultRequestProperties(mapOf("Icy-MetaData" to "1")) // Request Metadata
         
         val dataSourceFactory = DefaultDataSource.Factory(this, httpFactory)
         
@@ -223,6 +229,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+
         private fun showError(title: String, msg: String) {
         AlertDialog.Builder(this).setTitle(title).setMessage(msg).setPositiveButton("Close") { _, _ -> }.show()
     }
@@ -245,6 +252,7 @@ class MainActivity : AppCompatActivity() {
                     val first = allData.keys.first()
                     rvChannels?.adapter = ChannelAdapter(allData[first] ?: emptyList(), { play(it) }, { toggleFav(it) }, { focusGroupList() })
                     
+                    // Lock Focus inside Channel List
                     rvChannels?.setOnKeyListener { _, keyCode, event ->
                         if (event.action == KeyEvent.ACTION_DOWN) {
                             if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) { rvGroups?.requestFocus(); true }
@@ -346,6 +354,7 @@ class MainActivity : AppCompatActivity() {
     fun focusChannelList() { rvChannels?.requestFocus() }
 
     override fun onKeyDown(k: Int, e: KeyEvent?): Boolean {
+        // PRIORITY FIX: If Drawer is Open, let default Android navigation work
         if (drawerLayout?.isDrawerOpen(Gravity.END) == true) {
             if (k == KeyEvent.KEYCODE_BACK) { drawerLayout?.closeDrawers(); return true }
             return super.onKeyDown(k, e) 
@@ -409,3 +418,6 @@ class MainActivity : AppCompatActivity() {
     
     override fun onDestroy() { super.onDestroy(); player?.release() }
 }
+
+    
+    
