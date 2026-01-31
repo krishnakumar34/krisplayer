@@ -1,6 +1,5 @@
 package com.iptv.player
 
-import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
 import android.graphics.Color
@@ -27,8 +26,10 @@ import androidx.media3.common.MediaItem.DrmConfiguration
 import androidx.media3.common.MimeTypes
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.upstream.DefaultAllocator
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -41,7 +42,10 @@ import okhttp3.Request
 import java.net.CookieHandler
 import java.net.CookieManager
 import java.net.CookiePolicy
+import java.security.SecureRandom
+import java.security.cert.X509Certificate
 import java.util.concurrent.TimeUnit
+import javax.net.ssl.*
 
 class MainActivity : AppCompatActivity() {
     private var player: ExoPlayer? = null
@@ -49,7 +53,6 @@ class MainActivity : AppCompatActivity() {
     private var epgContainer: LinearLayout? = null
     private var rvGroups: RecyclerView? = null
     private var rvChannels: RecyclerView? = null
-    // rvRecents removed to prevent navigation issues
     private var searchContainer: LinearLayout? = null
     private var etSearch: EditText? = null
     private var rvSearchResults: RecyclerView? = null
@@ -66,14 +69,30 @@ class MainActivity : AppCompatActivity() {
     private val handler = Handler(Looper.getMainLooper())
     private val PICK_FILE = 101
 
-    // --- ROBUST RESOLVER CLIENT (MPV-Style) ---
-    private val resolverClient = OkHttpClient.Builder()
-        .followRedirects(true)
-        .followSslRedirects(true)
-        .connectTimeout(30, TimeUnit.SECONDS) // 30s Timeout
-        .readTimeout(30, TimeUnit.SECONDS)
-        .hostnameVerifier { _, _ -> true } 
-        .build()
+    // --- NUCLEAR SSL BYPASS (Trust ALL Certificates like MPV) ---
+    private fun getUnsafeOkHttpClient(): OkHttpClient {
+        try {
+            val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
+                override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+                override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+                override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+            })
+            val sslContext = SSLContext.getInstance("SSL")
+            sslContext.init(null, trustAllCerts, SecureRandom())
+            return OkHttpClient.Builder()
+                .sslSocketFactory(sslContext.socketFactory, trustAllCerts[0] as X509TrustManager)
+                .hostnameVerifier { _, _ -> true }
+                .followRedirects(true)
+                .followSslRedirects(true)
+                .connectTimeout(30, TimeUnit.SECONDS)
+                .readTimeout(30, TimeUnit.SECONDS)
+                .build()
+        } catch (e: Exception) {
+            throw RuntimeException(e)
+        }
+    }
+    
+    private val resolverClient = getUnsafeOkHttpClient()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -154,17 +173,27 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-
         private fun initializePlayer() {
+        // 1. AGGRESSIVE LOAD CONTROL (50MB Buffer like MPV)
+        // This helps preventing buffering on slow/unstable IPTV streams
+        val loadControl = DefaultLoadControl.Builder()
+            .setAllocator(DefaultAllocator(true, C.DEFAULT_BUFFER_SEGMENT_SIZE))
+            .setBufferDurationsMs(50000, 50000, 2500, 5000) // Min/Max buffer 50s
+            .build()
+
+        // 2. HTTP FACTORY WITH ICY METADATA ENABLED
         val httpFactory = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
             .setUserAgent("TiviMate/4.7.0") 
-            .setConnectTimeoutMs(30000) // 30s Timeout
+            .setConnectTimeoutMs(30000)
             .setReadTimeoutMs(30000)
+            .setKeepPostFor302Redirects(true)
+            .setDefaultRequestProperties(mapOf("Icy-MetaData" to "1")) // <--- ICY ENABLED HERE
         
         val dataSourceFactory = DefaultDataSource.Factory(this, httpFactory)
         
         player = ExoPlayer.Builder(this)
+            .setLoadControl(loadControl) // Apply big buffer
             .setMediaSourceFactory(DefaultMediaSourceFactory(this).setDataSourceFactory(dataSourceFactory))
             .build()
             
@@ -217,7 +246,7 @@ class MainActivity : AppCompatActivity() {
                     // Force HLS for playlists/scripts
                     builder.setMimeType(MimeTypes.APPLICATION_M3U8)
                 } 
-                else if (lowerUrl.endsWith(".ts") || lowerUrl.endsWith(".mpeg") || lowerUrl.endsWith(".mpg")) {
+                else if (lowerUrl.endsWith(".ts") || lowerUrl.endsWith(".mpeg") || lowerUrl.endsWith(".mpg") || lowerUrl.endsWith(".mkv")) {
                      // Standard MPEG-TS
                     builder.setMimeType(MimeTypes.VIDEO_MP2T)
                 }
@@ -241,7 +270,8 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun showError(title: String, msg: String) {
+
+        private fun showError(title: String, msg: String) {
         AlertDialog.Builder(this).setTitle(title).setMessage(msg).setPositiveButton("Close") { _, _ -> }.show()
     }
 
@@ -305,7 +335,7 @@ class MainActivity : AppCompatActivity() {
         repo.getPlaylists().forEach { p -> btn(p.name, "list") { repo.setActivePlaylist(p.id); loadData(p); drawerLayout?.closeDrawers() } }
     }
 
-        private fun showAddUrlDialog() {
+    private fun showAddUrlDialog() {
         val input = EditText(this); input.hint = "http://..."; input.setTextColor(Color.WHITE)
         AlertDialog.Builder(this).setTitle("Add URL").setView(input).setPositiveButton("Load") { _,_ ->
             if(input.text.isNotEmpty()) {
@@ -380,28 +410,17 @@ class MainActivity : AppCompatActivity() {
     fun focusGroupList() { rvGroups?.requestFocus() }
     fun focusChannelList() { rvChannels?.requestFocus() }
 
-    // --- CRITICAL NAVIGATION FIX ---
     override fun onKeyDown(k: Int, e: KeyEvent?): Boolean {
-        // PRIORITY 1: DRAWER NAVIGATION
-        // If Drawer is Open, let Android handle navigation between buttons (Search -> Add URL -> Local)
         if (drawerLayout?.isDrawerOpen(Gravity.END) == true) {
-            if (k == KeyEvent.KEYCODE_BACK) {
-                drawerLayout?.closeDrawers()
-                return true
-            }
+            if (k == KeyEvent.KEYCODE_BACK) { drawerLayout?.closeDrawers(); return true }
             return super.onKeyDown(k, e) 
         }
 
-        // PRIORITY 2: SEARCH NAVIGATION
         if (searchContainer?.visibility == View.VISIBLE) {
-            if (k == KeyEvent.KEYCODE_BACK) {
-                closeSearch()
-                return true
-            }
+            if (k == KeyEvent.KEYCODE_BACK) { closeSearch(); return true }
             return super.onKeyDown(k, e)
         }
 
-        // PRIORITY 3: NUMBERS
         if (k in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9) {
             numBuffer += (k - KeyEvent.KEYCODE_0)
             findViewById<TextView>(R.id.tvOverlayNum)?.let { tv ->
@@ -415,10 +434,8 @@ class MainActivity : AppCompatActivity() {
             return true
         }
 
-        // PRIORITY 4: PLAYER CONTROLS (Only when not navigating EPG)
         if (epgContainer?.visibility != View.VISIBLE) {
             when(k) {
-                // Channel UP = Next Channel
                 KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_CHANNEL_UP -> {
                     currentChannel?.let { curr ->
                         val idx = allChannelsFlat.indexOf(curr)
@@ -426,7 +443,6 @@ class MainActivity : AppCompatActivity() {
                     }
                     return true
                 }
-                // Channel DOWN = Previous Channel
                 KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_CHANNEL_DOWN -> {
                     currentChannel?.let { curr ->
                         val idx = allChannelsFlat.indexOf(curr)
@@ -449,7 +465,6 @@ class MainActivity : AppCompatActivity() {
             }
         } 
         
-        // PRIORITY 5: BACK BUTTON (Close EPG)
         if (k == KeyEvent.KEYCODE_BACK) {
             if (epgContainer?.visibility == View.VISIBLE) { epgContainer?.visibility = View.GONE; return true }
         }
@@ -462,3 +477,5 @@ class MainActivity : AppCompatActivity() {
         player?.release() 
     }
 }
+
+    
