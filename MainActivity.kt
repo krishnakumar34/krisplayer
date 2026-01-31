@@ -161,9 +161,12 @@ class MainActivity : AppCompatActivity() {
             .setBufferDurationsMs(50000, 50000, 2500, 5000)
             .build()
 
+            
+
         // 2. MPV HEADERS (Accept: */* is critical for some CDN tokens)
         val httpFactory = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
+             .setKeepPostFor302Redirects(true)
             .setUserAgent("TiviMate/4.7.0") 
             .setConnectTimeoutMs(30000)
             .setReadTimeoutMs(30000)
@@ -198,7 +201,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun play(c: Channel) {
+    /*private fun play(c: Channel) {
         lifecycleScope.launch {
             try {
                 currentChannel = c
@@ -210,11 +213,11 @@ class MainActivity : AppCompatActivity() {
                 val lowerUrl = realUrl.lowercase()
                 
                 // --- MPV FORMAT FORCING (FIXED LOGIC) ---
-                if (lowerUrl.contains(".m3u8") || lowerUrl.contains(".php") || lowerUrl.contains("mode=hls")) {
+               if (lowerUrl.contains(".m3u8") || lowerUrl.contains(".php") || lowerUrl.contains("mode=hls")) {
                     builder.setMimeType(MimeTypes.APPLICATION_M3U8)
                 } 
                 // FIXED: Use .contains() instead of .endsWith() to handle tokens (e.g. file.ts?token=123)
-                else if (lowerUrl.contains(".ts") || lowerUrl.contains(".mpeg") || lowerUrl.contains(".mpg") || lowerUrl.contains(".mkv")) {
+                /*else if (lowerUrl.contains(".ts") || lowerUrl.contains(".mpeg") || lowerUrl.contains(".mpg") || lowerUrl.contains(".mkv")) {
                     builder.setMimeType(MimeTypes.VIDEO_MP2T)
                 }
                 else if (realUrl.matches(Regex(".*\\/[0-9]+(\\?.*)?$"))) {
@@ -228,9 +231,37 @@ class MainActivity : AppCompatActivity() {
                 player?.setMediaItem(builder.build())
                 player?.prepare()
                 player?.play()
-                epgContainer?.visibility = View.GONE
+                 epgContainer?.visibility = View.GONE
             } catch (e: Exception) { Toast.makeText(this@MainActivity, "Error: ${e.message}", Toast.LENGTH_SHORT).show() }
         }
+    }*/
+    private fun play(c: Channel) {
+    lifecycleScope.launch {
+        try {
+            currentChannel = c
+            repo.addRecent(c)
+            showChannelInfo(c)
+
+            val uri = Uri.parse(c.url)
+
+            // 🔑 LET EXOPLAYER HANDLE REDIRECTS
+            val mediaItem = MediaItem.Builder()
+                .setUri(uri)
+                .build()
+
+            player?.setMediaItem(mediaItem)
+            player?.prepare()
+            player?.play()
+
+            epgContainer?.visibility = View.GONE
+        } catch (e: Exception) {
+            Toast.makeText(
+                this@MainActivity,
+                "Playback error: ${e.message}",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
     }
 
 
