@@ -68,7 +68,7 @@ class MainActivity : AppCompatActivity() {
     private val handler = Handler(Looper.getMainLooper())
     private val PICK_FILE = 101
 
-    // --- NUCLEAR SSL BYPASS (Trust ALL Certificates Globally) ---
+    // --- NUCLEAR SSL BYPASS (Applies to ExoPlayer & OkHttp) ---
     private fun applyGlobalTrustAllSSL() {
         try {
             val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
@@ -78,28 +78,27 @@ class MainActivity : AppCompatActivity() {
             })
             val sslContext = SSLContext.getInstance("SSL")
             sslContext.init(null, trustAllCerts, SecureRandom())
-            
-            // Apply to Global Default (Affects ExoPlayer's DefaultHttpDataSource)
+            // Apply globally so ExoPlayer's internal HttpURLConnection uses it
             HttpsURLConnection.setDefaultSSLSocketFactory(sslContext.socketFactory)
             HttpsURLConnection.setDefaultHostnameVerifier { _, _ -> true }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
+        } catch (e: Exception) { e.printStackTrace() }
     }
     
-    // Independent Client for Resolver
+    // Resolver Client (Independent)
     private val resolverClient = OkHttpClient.Builder()
         .followRedirects(true)
         .followSslRedirects(true)
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
-        .hostnameVerifier { _, _ -> true }
+        .hostnameVerifier { _, _ -> true } 
         .build()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // 1. KEEP SCREEN ON
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
+        // NUCLEAR BYPASS
         val policy = StrictMode.ThreadPolicy.Builder().permitAll().build()
         StrictMode.setThreadPolicy(policy)
 
@@ -107,7 +106,7 @@ class MainActivity : AppCompatActivity() {
         cookieManager.setCookiePolicy(CookiePolicy.ACCEPT_ORIGINAL_SERVER)
         CookieHandler.setDefault(cookieManager)
         
-        // APPLY GLOBAL SSL BYPASS
+        // APPLY GLOBAL SSL
         applyGlobalTrustAllSSL()
         
         try {
@@ -154,21 +153,25 @@ class MainActivity : AppCompatActivity() {
     }
 
 
+
         private fun initializePlayer() {
-        // 1. AGGRESSIVE BUFFER (50MB)
+        // 1. AGGRESSIVE BUFFER (50MB) - Fixes stalling on TS streams
         val loadControl = DefaultLoadControl.Builder()
             .setAllocator(DefaultAllocator(true, C.DEFAULT_BUFFER_SEGMENT_SIZE))
             .setBufferDurationsMs(50000, 50000, 2500, 5000)
             .build()
 
-        // 2. HTTP FACTORY (Inherits Global SSL Bypass)
+        // 2. MPV HEADERS (Accept: */* is critical for some CDN tokens)
         val httpFactory = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
             .setUserAgent("TiviMate/4.7.0") 
             .setConnectTimeoutMs(30000)
             .setReadTimeoutMs(30000)
             .setKeepPostFor302Redirects(true)
-            .setDefaultRequestProperties(mapOf("Icy-MetaData" to "1")) // Request Metadata
+            .setDefaultRequestProperties(mapOf(
+                "Icy-MetaData" to "1",
+                "Accept" to "*/*" // <--- ADDED: Fixes strict server rejections
+            ))
         
         val dataSourceFactory = DefaultDataSource.Factory(this, httpFactory)
         
@@ -206,11 +209,12 @@ class MainActivity : AppCompatActivity() {
                 val builder = MediaItem.Builder().setUri(Uri.parse(realUrl))
                 val lowerUrl = realUrl.lowercase()
                 
-                // --- MPV FORMAT FORCING ---
+                // --- MPV FORMAT FORCING (FIXED LOGIC) ---
                 if (lowerUrl.contains(".m3u8") || lowerUrl.contains(".php") || lowerUrl.contains("mode=hls")) {
                     builder.setMimeType(MimeTypes.APPLICATION_M3U8)
                 } 
-                else if (lowerUrl.endsWith(".ts") || lowerUrl.endsWith(".mpeg") || lowerUrl.endsWith(".mpg") || lowerUrl.endsWith(".mkv")) {
+                // FIXED: Use .contains() instead of .endsWith() to handle tokens (e.g. file.ts?token=123)
+                else if (lowerUrl.contains(".ts") || lowerUrl.contains(".mpeg") || lowerUrl.contains(".mpg") || lowerUrl.contains(".mkv")) {
                     builder.setMimeType(MimeTypes.VIDEO_MP2T)
                 }
                 else if (realUrl.matches(Regex(".*\\/[0-9]+(\\?.*)?$"))) {
@@ -228,6 +232,7 @@ class MainActivity : AppCompatActivity() {
             } catch (e: Exception) { Toast.makeText(this@MainActivity, "Error: ${e.message}", Toast.LENGTH_SHORT).show() }
         }
     }
+
 
 
         private fun showError(title: String, msg: String) {
@@ -252,7 +257,6 @@ class MainActivity : AppCompatActivity() {
                     val first = allData.keys.first()
                     rvChannels?.adapter = ChannelAdapter(allData[first] ?: emptyList(), { play(it) }, { toggleFav(it) }, { focusGroupList() })
                     
-                    // Lock Focus inside Channel List
                     rvChannels?.setOnKeyListener { _, keyCode, event ->
                         if (event.action == KeyEvent.ACTION_DOWN) {
                             if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) { rvGroups?.requestFocus(); true }
@@ -354,7 +358,6 @@ class MainActivity : AppCompatActivity() {
     fun focusChannelList() { rvChannels?.requestFocus() }
 
     override fun onKeyDown(k: Int, e: KeyEvent?): Boolean {
-        // PRIORITY FIX: If Drawer is Open, let default Android navigation work
         if (drawerLayout?.isDrawerOpen(Gravity.END) == true) {
             if (k == KeyEvent.KEYCODE_BACK) { drawerLayout?.closeDrawers(); return true }
             return super.onKeyDown(k, e) 
@@ -420,4 +423,5 @@ class MainActivity : AppCompatActivity() {
 }
 
     
+
     
