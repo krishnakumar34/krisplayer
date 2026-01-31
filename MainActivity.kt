@@ -49,6 +49,7 @@ class MainActivity : AppCompatActivity() {
     private var epgContainer: LinearLayout? = null
     private var rvGroups: RecyclerView? = null
     private var rvChannels: RecyclerView? = null
+    // rvRecents removed to prevent navigation issues
     private var searchContainer: LinearLayout? = null
     private var etSearch: EditText? = null
     private var rvSearchResults: RecyclerView? = null
@@ -240,7 +241,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-        private fun showError(title: String, msg: String) {
+    private fun showError(title: String, msg: String) {
         AlertDialog.Builder(this).setTitle(title).setMessage(msg).setPositiveButton("Close") { _, _ -> }.show()
     }
 
@@ -304,7 +305,7 @@ class MainActivity : AppCompatActivity() {
         repo.getPlaylists().forEach { p -> btn(p.name, "list") { repo.setActivePlaylist(p.id); loadData(p); drawerLayout?.closeDrawers() } }
     }
 
-    private fun showAddUrlDialog() {
+        private fun showAddUrlDialog() {
         val input = EditText(this); input.hint = "http://..."; input.setTextColor(Color.WHITE)
         AlertDialog.Builder(this).setTitle("Add URL").setView(input).setPositiveButton("Load") { _,_ ->
             if(input.text.isNotEmpty()) {
@@ -379,7 +380,28 @@ class MainActivity : AppCompatActivity() {
     fun focusGroupList() { rvGroups?.requestFocus() }
     fun focusChannelList() { rvChannels?.requestFocus() }
 
+    // --- CRITICAL NAVIGATION FIX ---
     override fun onKeyDown(k: Int, e: KeyEvent?): Boolean {
+        // PRIORITY 1: DRAWER NAVIGATION
+        // If Drawer is Open, let Android handle navigation between buttons (Search -> Add URL -> Local)
+        if (drawerLayout?.isDrawerOpen(Gravity.END) == true) {
+            if (k == KeyEvent.KEYCODE_BACK) {
+                drawerLayout?.closeDrawers()
+                return true
+            }
+            return super.onKeyDown(k, e) 
+        }
+
+        // PRIORITY 2: SEARCH NAVIGATION
+        if (searchContainer?.visibility == View.VISIBLE) {
+            if (k == KeyEvent.KEYCODE_BACK) {
+                closeSearch()
+                return true
+            }
+            return super.onKeyDown(k, e)
+        }
+
+        // PRIORITY 3: NUMBERS
         if (k in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9) {
             numBuffer += (k - KeyEvent.KEYCODE_0)
             findViewById<TextView>(R.id.tvOverlayNum)?.let { tv ->
@@ -393,9 +415,10 @@ class MainActivity : AppCompatActivity() {
             return true
         }
 
-        if (epgContainer?.visibility != View.VISIBLE && searchContainer?.visibility != View.VISIBLE) {
+        // PRIORITY 4: PLAYER CONTROLS (Only when not navigating EPG)
+        if (epgContainer?.visibility != View.VISIBLE) {
             when(k) {
-                // FIXED LOGIC: UP = Next Channel
+                // Channel UP = Next Channel
                 KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_CHANNEL_UP -> {
                     currentChannel?.let { curr ->
                         val idx = allChannelsFlat.indexOf(curr)
@@ -403,7 +426,7 @@ class MainActivity : AppCompatActivity() {
                     }
                     return true
                 }
-                // FIXED LOGIC: DOWN = Previous Channel
+                // Channel DOWN = Previous Channel
                 KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_CHANNEL_DOWN -> {
                     currentChannel?.let { curr ->
                         val idx = allChannelsFlat.indexOf(curr)
@@ -426,9 +449,8 @@ class MainActivity : AppCompatActivity() {
             }
         } 
         
+        // PRIORITY 5: BACK BUTTON (Close EPG)
         if (k == KeyEvent.KEYCODE_BACK) {
-            if (searchContainer?.visibility == View.VISIBLE) { closeSearch(); return true }
-            if (drawerLayout?.isDrawerOpen(Gravity.END) == true) { drawerLayout?.closeDrawers(); return true }
             if (epgContainer?.visibility == View.VISIBLE) { epgContainer?.visibility = View.GONE; return true }
         }
 
@@ -440,6 +462,3 @@ class MainActivity : AppCompatActivity() {
         player?.release() 
     }
 }
-
-    
-    
