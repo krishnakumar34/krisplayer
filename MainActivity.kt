@@ -4,6 +4,7 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
 import android.graphics.Color
+import android.graphics.Typeface
 import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
@@ -14,6 +15,8 @@ import android.text.TextWatcher
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
+import android.view.WindowManager
+import android.view.inputmethod.EditorInfo
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.drawerlayout.widget.DrawerLayout
@@ -52,6 +55,9 @@ class MainActivity : AppCompatActivity() {
     private var rvSearchResults: RecyclerView? = null
     private var tvSearchCount: TextView? = null
 
+    // Channel Info Overlay
+    private var tvChannelInfo: TextView? = null
+
     private lateinit var repo: Repository
     private var allData = mapOf<String, List<Channel>>()
     private var allChannelsFlat = listOf<Channel>()
@@ -60,22 +66,26 @@ class MainActivity : AppCompatActivity() {
     private val handler = Handler(Looper.getMainLooper())
     private val PICK_FILE = 101
 
-    // --- ROBUST RESOLVER CLIENT ---
+    // --- ROBUST RESOLVER CLIENT (MPV-Style) ---
     private val resolverClient = OkHttpClient.Builder()
         .followRedirects(true)
         .followSslRedirects(true)
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(15, TimeUnit.SECONDS)
+        .connectTimeout(30, TimeUnit.SECONDS) // 30s Timeout
+        .readTimeout(30, TimeUnit.SECONDS)
+        .hostnameVerifier { _, _ -> true } 
         .build()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
+        // 1. KEEP SCREEN ON
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+
         // NUCLEAR BYPASS
         val policy = StrictMode.ThreadPolicy.Builder().permitAll().build()
         StrictMode.setThreadPolicy(policy)
 
-        // COOKIE MANAGER
+        // COOKIE MANAGER (MPV Logic)
         val cookieManager = CookieManager()
         cookieManager.setCookiePolicy(CookiePolicy.ACCEPT_ORIGINAL_SERVER)
         CookieHandler.setDefault(cookieManager)
@@ -84,6 +94,9 @@ class MainActivity : AppCompatActivity() {
             setContentView(R.layout.activity_main)
             repo = Repository(this)
             
+            // 2. SETUP OVERLAY
+            setupChannelInfoOverlay()
+
             initializePlayer()
 
             drawerLayout = findViewById(R.id.drawerLayout)
@@ -108,13 +121,47 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun initializePlayer() {
-        // --- PLAYER CONFIG ---
+    private fun setupChannelInfoOverlay() {
+        val root = findViewById<FrameLayout>(android.R.id.content) ?: return
+        
+        tvChannelInfo = TextView(this).apply {
+            setTextColor(Color.WHITE)
+            textSize = 28f 
+            setTypeface(null, Typeface.BOLD)
+            setShadowLayer(6f, 3f, 3f, Color.BLACK)
+            setBackgroundColor(Color.parseColor("#99000000")) 
+            setPadding(40, 20, 60, 20)
+            visibility = View.GONE
+        }
+
+        val params = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT
+        ).apply {
+            gravity = Gravity.BOTTOM or Gravity.START
+            setMargins(50, 0, 0, 50)
+        }
+
+        addContentView(tvChannelInfo, params)
+    }
+
+    private fun showChannelInfo(c: Channel) {
+        tvChannelInfo?.apply {
+            text = "${c.number}  |  ${c.name}"
+            visibility = View.VISIBLE
+            handler.removeCallbacksAndMessages("HIDE_INFO")
+            handler.postAtTime({
+                visibility = View.GONE
+            }, "HIDE_INFO", android.os.SystemClock.uptimeMillis() + 4000)
+        }
+    }
+
+        private fun initializePlayer() {
         val httpFactory = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
             .setUserAgent("TiviMate/4.7.0") 
-            .setConnectTimeoutMs(15000)
-            .setReadTimeoutMs(15000)
+            .setConnectTimeoutMs(30000) // 30s Timeout
+            .setReadTimeoutMs(30000)
         
         val dataSourceFactory = DefaultDataSource.Factory(this, httpFactory)
         
@@ -127,51 +174,27 @@ class MainActivity : AppCompatActivity() {
         playerView?.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL
     }
 
-    // --- SMART HYBRID RESOLVER (HEAD -> Fallback to GET) ---
+    // --- MPV RESOLVER: GET ONLY ---
     private suspend fun resolveRedirects(url: String): String {
         return withContext(Dispatchers.IO) {
-            // Optimization: Skip valid static files
-            if ((url.contains(".ts") || url.contains(".m3u8")) && !url.contains(".php") && !url.contains("fake=")) {
-                return@withContext url
-            }
-
-            // ATTEMPT 1: TRY HEAD (Preferred)
-            // It is faster and works for most redirects without downloading the body.
             try {
-                val reqHead = Request.Builder()
+                // Optimization: Skip valid static files
+                if ((url.contains(".ts") || url.contains(".m3u8")) && !url.contains(".php") && !url.contains("fake=")) {
+                    return@withContext url
+                }
+
+                val req = Request.Builder()
                     .url(url)
-                    .head()
+                    .get() // GET mimics browser/MPV behavior
                     .header("User-Agent", "TiviMate/4.7.0")
                     .build()
                 
-                val resp = resolverClient.newCall(reqHead).execute()
-                if (resp.isSuccessful || resp.isRedirect) {
-                    val finalUrl = resp.request.url.toString()
-                    resp.close()
-                    return@withContext finalUrl
-                }
-                resp.close()
-                // If HEAD returns an error code (like 405 Method Not Allowed), fall through to GET
-            } catch (e: Exception) {
-                // If HEAD fails (network error or crash), just swallow error and try GET
-            }
-
-            // ATTEMPT 2: TRY GET (Fallback)
-            // Robust method that mimics a browser fully.
-            try {
-                val reqGet = Request.Builder()
-                    .url(url)
-                    .get()
-                    .header("User-Agent", "TiviMate/4.7.0")
-                    .build()
-                    
-                val resp = resolverClient.newCall(reqGet).execute()
+                val resp = resolverClient.newCall(req).execute()
                 val finalUrl = resp.request.url.toString()
                 resp.close()
                 return@withContext finalUrl
             } catch (e: Exception) {
-                // If both fail, return original URL
-                return@withContext url
+                return@withContext url // Fail open
             }
         }
     }
@@ -182,14 +205,28 @@ class MainActivity : AppCompatActivity() {
                 currentChannel = c
                 repo.addRecent(c)
                 updateRecentList()
+                showChannelInfo(c)
                 
-                // 1. RESOLVE THE URL (Smart Hybrid: HEAD -> GET)
+                // 1. Resolve URL
                 val realUrl = resolveRedirects(c.url)
                 
-                // 2. FORCE HLS MIME TYPE
-                val builder = MediaItem.Builder()
-                    .setUri(Uri.parse(realUrl))
-                    .setMimeType(MimeTypes.APPLICATION_M3U8) 
+                val builder = MediaItem.Builder().setUri(Uri.parse(realUrl))
+                
+                // --- MPV-STYLE MIME TYPE SNIFFING ---
+                val lowerUrl = realUrl.lowercase()
+                
+                if (lowerUrl.contains(".m3u8") || lowerUrl.contains(".php") || lowerUrl.contains("mode=hls")) {
+                    // Force HLS for playlists/scripts
+                    builder.setMimeType(MimeTypes.APPLICATION_M3U8)
+                } 
+                else if (lowerUrl.endsWith(".ts") || lowerUrl.endsWith(".mpeg") || lowerUrl.endsWith(".mpg")) {
+                     // Standard MPEG-TS
+                    builder.setMimeType(MimeTypes.VIDEO_MP2T)
+                }
+                else if (realUrl.matches(Regex(".*\\/[0-9]+(\\?.*)?$"))) {
+                    // Force TS for extensionless numeric IDs (e.g. .../2739)
+                    builder.setMimeType(MimeTypes.VIDEO_MP2T)
+                }
                 
                 if (c.drmLicense != null) {
                     builder.setDrmConfiguration(DrmConfiguration.Builder(C.WIDEVINE_UUID).setLicenseUri(c.drmLicense).build())
@@ -201,12 +238,11 @@ class MainActivity : AppCompatActivity() {
                 
                 epgContainer?.visibility = View.GONE
             } catch (e: Exception) { 
-                Toast.makeText(this@MainActivity, "Playback Error: ${e.message}", Toast.LENGTH_SHORT).show() 
+                Toast.makeText(this@MainActivity, "Error: ${e.message}", Toast.LENGTH_SHORT).show() 
             }
         }
     }
-    
-    // --- UI HELPERS ---
+
     private fun showError(title: String, msg: String) {
         AlertDialog.Builder(this).setTitle(title).setMessage(msg).setPositiveButton("Close") { _, _ -> }.show()
     }
@@ -226,6 +262,21 @@ class MainActivity : AppCompatActivity() {
                 if (allData.isNotEmpty()) {
                     val first = allData.keys.first()
                     rvChannels?.adapter = ChannelAdapter(allData[first] ?: emptyList(), { play(it) }, { toggleFav(it) }, { focusGroupList() })
+                    
+                    // --- NAVIGATION FIX 1: LOCK FOCUS IN LIST ---
+                    rvChannels?.setOnKeyListener { _, keyCode, event ->
+                        if (event.action == KeyEvent.ACTION_DOWN) {
+                            if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
+                                rvGroups?.requestFocus()
+                                true
+                            } else if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                                true 
+                            } else {
+                                false 
+                            }
+                        } else false
+                    }
+
                     epgContainer?.visibility = View.VISIBLE
                     rvGroups?.requestFocus()
                     updateRecentList()
@@ -244,8 +295,7 @@ class MainActivity : AppCompatActivity() {
         fun btn(t: String, tag: String, a: () -> Unit) {
             val b = Button(this); b.text = t; b.tag = tag; b.setTextColor(Color.WHITE)
             b.setBackgroundResource(android.R.drawable.btn_default)
-            b.isFocusable = true
-            b.isFocusableInTouchMode = true
+            b.isFocusable = true; b.isFocusableInTouchMode = true
             b.setOnClickListener { a() }
             root.addView(b)
         }
@@ -310,6 +360,20 @@ class MainActivity : AppCompatActivity() {
             override fun beforeTextChanged(s: CharSequence?, st: Int, c: Int, a: Int) {}
             override fun onTextChanged(s: CharSequence?, st: Int, b: Int, c: Int) {}
         })
+        
+        // --- NAVIGATION FIX 2: SEARCH BUTTON ---
+        etSearch?.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_SEARCH || actionId == EditorInfo.IME_ACTION_DONE) {
+                rvSearchResults?.requestFocus()
+                true
+            } else false
+        }
+        etSearch?.setOnKeyListener { _, keyCode, event ->
+            if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                rvSearchResults?.requestFocus()
+                true
+            } else false
+        }
     }
 
     private fun performSearch(query: String) {
@@ -389,3 +453,5 @@ class MainActivity : AppCompatActivity() {
     
     override fun onDestroy() { super.onDestroy(); player?.release() }
 }
+
+    
