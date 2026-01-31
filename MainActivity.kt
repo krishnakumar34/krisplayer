@@ -308,7 +308,7 @@ class MainActivity : AppCompatActivity() {
         sub.isFocusable = false
         root.addView(sub)
         
-        repo.getPlaylists().forEach { p -> btn(p.name, "list") { repo.setActivePlaylist(p.id); loadData(p); drawerLayout?.closeDrawers() } }
+        repo.getPlaylists().forEach { p -> btn(p.name, "list") { repo.setActivePlaylist(p.id); loadData(p); drawerLayout?.closeDrawers()  }
     }
 
     .
