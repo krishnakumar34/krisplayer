@@ -1,6 +1,6 @@
 package com.iptv.player
 
-import android.app.Activity // <--- FIXED: Added missing import
+import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
 import android.graphics.Color
@@ -35,17 +35,12 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import okhttp3.OkHttpClient
-import okhttp3.Request
 import java.net.CookieHandler
 import java.net.CookieManager
 import java.net.CookiePolicy
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
-import java.util.concurrent.TimeUnit
 import javax.net.ssl.*
 
 class MainActivity : AppCompatActivity() {
@@ -68,7 +63,8 @@ class MainActivity : AppCompatActivity() {
     private val handler = Handler(Looper.getMainLooper())
     private val PICK_FILE = 101
 
-    // --- NUCLEAR SSL BYPASS (Applies to ExoPlayer & OkHttp) ---
+    // --- GLOBAL UNSAFE SSL (MPV STYLE) ---
+    // Forces the entire Android OS to trust every certificate for this app.
     private fun applyGlobalTrustAllSSL() {
         try {
             val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
@@ -78,35 +74,25 @@ class MainActivity : AppCompatActivity() {
             })
             val sslContext = SSLContext.getInstance("SSL")
             sslContext.init(null, trustAllCerts, SecureRandom())
-            // Apply globally so ExoPlayer's internal HttpURLConnection uses it
             HttpsURLConnection.setDefaultSSLSocketFactory(sslContext.socketFactory)
             HttpsURLConnection.setDefaultHostnameVerifier { _, _ -> true }
         } catch (e: Exception) { e.printStackTrace() }
     }
-    
-    // Resolver Client (Independent)
-    private val resolverClient = OkHttpClient.Builder()
-        .followRedirects(true)
-        .followSslRedirects(true)
-        .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
-        .hostnameVerifier { _, _ -> true } 
-        .build()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // 1. KEEP SCREEN ON
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
-        // NUCLEAR BYPASS
+        // Allow Network on Main Thread (Essential for some IPTV redirects)
         val policy = StrictMode.ThreadPolicy.Builder().permitAll().build()
         StrictMode.setThreadPolicy(policy)
 
+        // --- GLOBAL COOKIE MANAGER (ACCEPT ALL) ---
+        // Changed to ACCEPT_ALL. This fixes 301 redirects that drop cookies.
         val cookieManager = CookieManager()
-        cookieManager.setCookiePolicy(CookiePolicy.ACCEPT_ORIGINAL_SERVER)
+        cookieManager.setCookiePolicy(CookiePolicy.ACCEPT_ALL)
         CookieHandler.setDefault(cookieManager)
         
-        // APPLY GLOBAL SSL
         applyGlobalTrustAllSSL()
         
         try {
@@ -153,15 +139,16 @@ class MainActivity : AppCompatActivity() {
     }
 
 
-
         private fun initializePlayer() {
-        // 1. AGGRESSIVE BUFFER (50MB) - Fixes stalling on TS streams
+        // 1. MASSIVE BUFFER (50MB) - Stops stuttering
         val loadControl = DefaultLoadControl.Builder()
             .setAllocator(DefaultAllocator(true, C.DEFAULT_BUFFER_SEGMENT_SIZE))
             .setBufferDurationsMs(50000, 50000, 2500, 5000)
             .build()
 
-        // 2. MPV HEADERS (Accept: */* is critical for some CDN tokens)
+        // 2. HTTP FACTORY (Native Redirects Only)
+        // We use ExoPlayer's native redirect handling. 
+        // Because we set Global SSL/Cookies in onCreate, this works perfectly.
         val httpFactory = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
             .setUserAgent("TiviMate/4.7.0") 
@@ -170,7 +157,8 @@ class MainActivity : AppCompatActivity() {
             .setKeepPostFor302Redirects(true)
             .setDefaultRequestProperties(mapOf(
                 "Icy-MetaData" to "1",
-                "Accept" to "*/*" // <--- ADDED: Fixes strict server rejections
+                "Connection" to "keep-alive",
+                "Accept" to "*/*"
             ))
         
         val dataSourceFactory = DefaultDataSource.Factory(this, httpFactory)
@@ -185,51 +173,45 @@ class MainActivity : AppCompatActivity() {
         playerView?.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL
     }
 
-    private suspend fun resolveRedirects(url: String): String {
-        return withContext(Dispatchers.IO) {
-            try {
-                if ((url.contains(".ts") || url.contains(".m3u8")) && !url.contains(".php") && !url.contains("fake=")) return@withContext url
-                val req = Request.Builder().url(url).get().header("User-Agent", "TiviMate/4.7.0").build()
-                val resp = resolverClient.newCall(req).execute()
-                val finalUrl = resp.request.url.toString()
-                resp.close()
-                return@withContext finalUrl
-            } catch (e: Exception) { return@withContext url }
-        }
-    }
-
     private fun play(c: Channel) {
-        lifecycleScope.launch {
-            try {
-                currentChannel = c
-                repo.addRecent(c)
-                showChannelInfo(c)
-                
-                val realUrl = resolveRedirects(c.url)
-                val builder = MediaItem.Builder().setUri(Uri.parse(c.url))
-                val lowerUrl = c.url
-                
-                // --- MPV FORMAT FORCING (FIXED LOGIC) ---
-                if (lowerUrl.contains(".m3u8") || lowerUrl.contains(".php") || lowerUrl.contains("mode=hls")) {
-                    builder.setMimeType(MimeTypes.APPLICATION_M3U8)
-                } 
-                // FIXED: Use .contains() instead of .endsWith() to handle tokens (e.g. file.ts?token=123)
-                /*else if (lowerUrl.contains(".ts") || lowerUrl.contains(".mpeg") || lowerUrl.contains(".mpg") || lowerUrl.contains(".mkv")) {
-                    builder.setMimeType(MimeTypes.VIDEO_MP2T)
-                }*/
-                else if (realUrl.matches(Regex(".*\\/[0-9]+(\\?.*)?$"))) {
-                    builder.setMimeType(MimeTypes.VIDEO_MP2T)
-                }
-                
-                if (c.drmLicense != null) {
-                    builder.setDrmConfiguration(DrmConfiguration.Builder(C.WIDEVINE_UUID).setLicenseUri(c.drmLicense).build())
-                }
-                
-                player?.setMediaItem(builder.build())
-                player?.prepare()
-                player?.play()
-                epgContainer?.visibility = View.GONE
-            } catch (e: Exception) { Toast.makeText(this@MainActivity, "Error: ${e.message}", Toast.LENGTH_SHORT).show() }
+        // NO COROUTINE NEEDED. We don't resolve manually anymore.
+        // We pass the RAW URL to ExoPlayer immediately.
+        try {
+            currentChannel = c
+            repo.addRecent(c)
+            showChannelInfo(c)
+            
+            // Pass the RAW URL. Do NOT resolve it manually.
+            val rawUrl = c.url 
+            val builder = MediaItem.Builder().setUri(Uri.parse(rawUrl))
+            val lowerUrl = rawUrl.lowercase()
+            
+            // --- AGGRESSIVE HINTING (Tell ExoPlayer what it is) ---
+            
+            // 1. If it looks like a playlist (M3U8 / PHP), force HLS
+            if (lowerUrl.contains(".m3u8") || lowerUrl.contains(".php") || lowerUrl.contains("mode=hls")) {
+                builder.setMimeType(MimeTypes.APPLICATION_M3U8)
+            } 
+            // 2. If it looks like a stream file (TS/MPEG/MKV), force TS
+            else if (lowerUrl.contains(".ts") || lowerUrl.contains(".mpeg") || lowerUrl.contains(".mpg") || lowerUrl.contains(".mkv")) {
+                builder.setMimeType(MimeTypes.VIDEO_MP2T)
+            }
+            // 3. If it is a numeric ID (Mystery Link), force TS
+            else if (rawUrl.matches(Regex(".*\\/[0-9]+(\\?.*)?$"))) {
+                builder.setMimeType(MimeTypes.VIDEO_MP2T)
+            }
+            // 4. Fallback: If no match, ExoPlayer will probe it (MPV behavior)
+            
+            if (c.drmLicense != null) {
+                builder.setDrmConfiguration(DrmConfiguration.Builder(C.WIDEVINE_UUID).setLicenseUri(c.drmLicense).build())
+            }
+            
+            player?.setMediaItem(builder.build())
+            player?.prepare()
+            player?.play()
+            epgContainer?.visibility = View.GONE
+        } catch (e: Exception) { 
+            Toast.makeText(this@MainActivity, "Error: ${e.message}", Toast.LENGTH_SHORT).show() 
         }
     }
 
@@ -362,12 +344,10 @@ class MainActivity : AppCompatActivity() {
             if (k == KeyEvent.KEYCODE_BACK) { drawerLayout?.closeDrawers(); return true }
             return super.onKeyDown(k, e) 
         }
-
         if (searchContainer?.visibility == View.VISIBLE) {
             if (k == KeyEvent.KEYCODE_BACK) { closeSearch(); return true }
             return super.onKeyDown(k, e)
         }
-
         if (k in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9) {
             numBuffer += (k - KeyEvent.KEYCODE_0)
             findViewById<TextView>(R.id.tvOverlayNum)?.let { tv ->
@@ -380,7 +360,6 @@ class MainActivity : AppCompatActivity() {
             }
             return true
         }
-
         if (epgContainer?.visibility != View.VISIBLE) {
             when(k) {
                 KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_CHANNEL_UP -> {
@@ -411,11 +390,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         } 
-        
-        if (k == KeyEvent.KEYCODE_BACK) {
-            if (epgContainer?.visibility == View.VISIBLE) { epgContainer?.visibility = View.GONE; return true }
-        }
-
+        if (k == KeyEvent.KEYCODE_BACK) { if (epgContainer?.visibility == View.VISIBLE) { epgContainer?.visibility = View.GONE; return true } }
         return super.onKeyDown(k, e)
     }
     
@@ -423,5 +398,4 @@ class MainActivity : AppCompatActivity() {
 }
 
     
-
     
