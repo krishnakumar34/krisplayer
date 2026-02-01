@@ -206,17 +206,17 @@ class MainActivity : AppCompatActivity() {
                 showChannelInfo(c)
                 
                 val realUrl = resolveRedirects(c.url)
-                val builder = MediaItem.Builder().setUri(Uri.parse(realUrl))
-                val lowerUrl = realUrl.lowercase()
+                val builder = MediaItem.Builder().setUri(Uri.parse(c.url))
+                val lowerUrl = c.url
                 
                 // --- MPV FORMAT FORCING (FIXED LOGIC) ---
                 if (lowerUrl.contains(".m3u8") || lowerUrl.contains(".php") || lowerUrl.contains("mode=hls")) {
                     builder.setMimeType(MimeTypes.APPLICATION_M3U8)
                 } 
                 // FIXED: Use .contains() instead of .endsWith() to handle tokens (e.g. file.ts?token=123)
-                else if (lowerUrl.contains(".ts") || lowerUrl.contains(".mpeg") || lowerUrl.contains(".mpg") || lowerUrl.contains(".mkv")) {
+                /*else if (lowerUrl.contains(".ts") || lowerUrl.contains(".mpeg") || lowerUrl.contains(".mpg") || lowerUrl.contains(".mkv")) {
                     builder.setMimeType(MimeTypes.VIDEO_MP2T)
-                }
+                }*/
                 else if (realUrl.matches(Regex(".*\\/[0-9]+(\\?.*)?$"))) {
                     builder.setMimeType(MimeTypes.VIDEO_MP2T)
                 }
