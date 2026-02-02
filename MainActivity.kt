@@ -35,11 +35,11 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
-// --- NEW IMPORTS FOR MANUAL SOURCE ---
+// --- IMPORTS FOR MANUAL SOURCE ---
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.exoplayer.source.MediaSource
-// -------------------------------------
+// ---------------------------------
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -58,7 +58,6 @@ import javax.net.ssl.*
 
 class MainActivity : AppCompatActivity() {
     private var player: ExoPlayer? = null
-    // We declare the Factory as a class property so we can use it in play()
     private lateinit var dataSourceFactory: DefaultDataSource.Factory
     
     private var drawerLayout: DrawerLayout? = null
@@ -79,21 +78,25 @@ class MainActivity : AppCompatActivity() {
     private val handler = Handler(Looper.getMainLooper())
     private val PICK_FILE = 101
 
-    // --- COOKIE BRIDGE ---
+    // --- COOKIE BRIDGE (FIXED: Uses .toUri()) ---
     private class BridgeCookieJar : CookieJar {
         private val manager = java.net.CookieManager.getDefault() as java.net.CookieManager
+        
         override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
             val cookieStore = manager.cookieStore
             cookies.forEach { 
                 val javaCookie = java.net.HttpCookie(it.name, it.value)
                 javaCookie.domain = it.domain
                 javaCookie.path = it.path
-                cookieStore.add(url.uri(), javaCookie)
+                // ERROR FIXED HERE: Changed .uri() to .toUri()
+                cookieStore.add(url.toUri(), javaCookie) 
             }
         }
+
         override fun loadForRequest(url: HttpUrl): List<Cookie> {
             val cookieStore = manager.cookieStore
-            return cookieStore.get(url.uri()).map { 
+            // ERROR FIXED HERE: Changed .uri() to .toUri()
+            return cookieStore.get(url.toUri()).map { 
                 Cookie.Builder().name(it.name).value(it.value).domain(url.host).path(url.encodedPath).build() 
             }
         }
@@ -161,7 +164,6 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) { e.printStackTrace(); showError("Init Error", "${e.message}") }
     }
     
-    // ... setupChannelInfoOverlay() and showChannelInfo() remain same ...
     private fun setupChannelInfoOverlay() {
         val root = findViewById<FrameLayout>(android.R.id.content) ?: return
         tvChannelInfo = TextView(this).apply {
@@ -182,7 +184,7 @@ class MainActivity : AppCompatActivity() {
             handler.postAtTime({ visibility = View.GONE }, "HIDE_INFO", android.os.SystemClock.uptimeMillis() + 4000)
         }
     }
-    
+
         private fun initializePlayer() {
         val loadControl = DefaultLoadControl.Builder()
             .setAllocator(DefaultAllocator(true, C.DEFAULT_BUFFER_SEGMENT_SIZE))
@@ -201,7 +203,7 @@ class MainActivity : AppCompatActivity() {
                 "Accept" to "*/*"
             ))
         
-        // Save this factory to the class variable so play() can use it
+        // Save for play() function
         dataSourceFactory = DefaultDataSource.Factory(this, httpFactory)
         
         player = ExoPlayer.Builder(this)
@@ -249,18 +251,18 @@ class MainActivity : AppCompatActivity() {
                 repo.addRecent(c)
                 showChannelInfo(c)
 
-                // 1. Resolve to get final URL and Type
+                // 1. Resolve URL
                 val (finalUrl, detectedMime) = resolveAndDetect(c.url)
                 val uri = Uri.parse(finalUrl)
 
-                // 2. FORCE SOURCE TYPE (The "ChatGPT Fix")
+                // 2. FORCE SOURCE (Manual Switching)
                 val mediaSource: MediaSource = if (detectedMime == MimeTypes.APPLICATION_M3U8) {
-                    // Force HLS Mode
+                    // Force HLS Mode for M3U8
                     HlsMediaSource.Factory(dataSourceFactory)
-                        .setAllowChunklessPreparation(true) // Faster start
+                        .setAllowChunklessPreparation(true)
                         .createMediaSource(MediaItem.fromUri(uri))
                 } else {
-                    // Force TS / Standard Video Mode
+                    // Force Progressive (TS/MP4) for others
                     ProgressiveMediaSource.Factory(dataSourceFactory)
                         .createMediaSource(MediaItem.fromUri(uri))
                 }
@@ -274,7 +276,8 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
-    
+
+
         private fun showError(title: String, msg: String) {
         AlertDialog.Builder(this).setTitle(title).setMessage(msg).setPositiveButton("Close") { _, _ -> }.show()
     }
@@ -454,6 +457,3 @@ class MainActivity : AppCompatActivity() {
     
     override fun onDestroy() { super.onDestroy(); player?.release() }
 }
-
-    
-    
