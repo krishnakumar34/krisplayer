@@ -28,6 +28,7 @@ import androidx.media3.common.MimeTypes
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.upstream.DefaultAllocator
@@ -35,11 +36,9 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
-// --- IMPORTS FOR MANUAL SOURCE ---
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.exoplayer.source.MediaSource
-// ---------------------------------
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -78,31 +77,25 @@ class MainActivity : AppCompatActivity() {
     private val handler = Handler(Looper.getMainLooper())
     private val PICK_FILE = 101
 
-    // --- COOKIE BRIDGE (FIXED: Uses .toUri()) ---
     private class BridgeCookieJar : CookieJar {
         private val manager = java.net.CookieManager.getDefault() as java.net.CookieManager
-        
         override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
             val cookieStore = manager.cookieStore
             cookies.forEach { 
                 val javaCookie = java.net.HttpCookie(it.name, it.value)
                 javaCookie.domain = it.domain
                 javaCookie.path = it.path
-                // ERROR FIXED HERE: Changed .uri() to .toUri()
-                cookieStore.add(url.toUri(), javaCookie) 
+                cookieStore.add(url.toUri(), javaCookie)
             }
         }
-
         override fun loadForRequest(url: HttpUrl): List<Cookie> {
             val cookieStore = manager.cookieStore
-            // ERROR FIXED HERE: Changed .uri() to .toUri()
             return cookieStore.get(url.toUri()).map { 
                 Cookie.Builder().name(it.name).value(it.value).domain(url.host).path(url.encodedPath).build() 
             }
         }
     }
 
-    // --- GLOBAL TRUST-ALL SSL ---
     private fun applyGlobalTrustAllSSL() {
         try {
             val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
@@ -117,7 +110,6 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) { e.printStackTrace() }
     }
 
-    // --- RESOLVER CLIENT ---
     private val resolverClient by lazy {
         OkHttpClient.Builder()
             .cookieJar(BridgeCookieJar())
@@ -132,9 +124,7 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-
-        val policy = StrictMode.ThreadPolicy.Builder().permitAll().build()
-        StrictMode.setThreadPolicy(policy)
+        StrictMode.setThreadPolicy(StrictMode.ThreadPolicy.Builder().permitAll().build())
 
         val cookieManager = CookieManager()
         cookieManager.setCookiePolicy(CookiePolicy.ACCEPT_ALL)
@@ -163,7 +153,7 @@ class MainActivity : AppCompatActivity() {
             if (active != null) loadData(active) else showWelcomeDialog()
         } catch (e: Exception) { e.printStackTrace(); showError("Init Error", "${e.message}") }
     }
-    
+
     private fun setupChannelInfoOverlay() {
         val root = findViewById<FrameLayout>(android.R.id.content) ?: return
         tvChannelInfo = TextView(this).apply {
@@ -184,13 +174,20 @@ class MainActivity : AppCompatActivity() {
             handler.postAtTime({ visibility = View.GONE }, "HIDE_INFO", android.os.SystemClock.uptimeMillis() + 4000)
         }
     }
-
+    
         private fun initializePlayer() {
+        // 1. ROBUST RENDERERS (Software Decode fallback)
+        // This ensures compatibility with weird codecs sometimes found in IPTV
+        val renderersFactory = DefaultRenderersFactory(this)
+            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
+
+        // 2. BUFFERING
         val loadControl = DefaultLoadControl.Builder()
             .setAllocator(DefaultAllocator(true, C.DEFAULT_BUFFER_SEGMENT_SIZE))
             .setBufferDurationsMs(50000, 50000, 1000, 3000)
             .build()
 
+        // 3. HTTP FACTORY
         val httpFactory = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
             .setUserAgent("TiviMate/4.7.0") 
@@ -203,10 +200,9 @@ class MainActivity : AppCompatActivity() {
                 "Accept" to "*/*"
             ))
         
-        // Save for play() function
         dataSourceFactory = DefaultDataSource.Factory(this, httpFactory)
         
-        player = ExoPlayer.Builder(this)
+        player = ExoPlayer.Builder(this, renderersFactory) // Use the robust renderer
             .setLoadControl(loadControl)
             .build()
             
@@ -215,7 +211,6 @@ class MainActivity : AppCompatActivity() {
         playerView?.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL
     }
 
-    // --- PEEK & PLAY RESOLVER ---
     private suspend fun resolveAndDetect(url: String): Pair<String, String?> {
         return withContext(Dispatchers.IO) {
             try {
@@ -224,6 +219,7 @@ class MainActivity : AppCompatActivity() {
 
                 val req = Request.Builder().url(url).head().header("User-Agent", "TiviMate/4.7.0").build()
                 var resp = resolverClient.newCall(req).execute()
+                
                 if (!resp.isSuccessful) {
                     resp.close()
                     val getReq = Request.Builder().url(url).get().header("User-Agent", "TiviMate/4.7.0").build()
@@ -235,12 +231,15 @@ class MainActivity : AppCompatActivity() {
                 resp.close()
 
                 val mimeType = when {
-                    finalUrl.contains(".m3u8") || contentType.contains("mpegurl") -> MimeTypes.APPLICATION_M3U8
+                    finalUrl.contains(".m3u8") || contentType.contains("mpegurl") || contentType.contains("x-mpegurl") -> MimeTypes.APPLICATION_M3U8
                     finalUrl.contains(".ts") || contentType.contains("mp2t") -> MimeTypes.VIDEO_MP2T
                     else -> null
                 }
+                
                 return@withContext Pair(finalUrl, mimeType)
-            } catch (e: Exception) { return@withContext Pair(url, null) }
+            } catch (e: Exception) {
+                return@withContext Pair(url, null)
+            }
         }
     }
 
@@ -251,18 +250,16 @@ class MainActivity : AppCompatActivity() {
                 repo.addRecent(c)
                 showChannelInfo(c)
 
-                // 1. Resolve URL
                 val (finalUrl, detectedMime) = resolveAndDetect(c.url)
                 val uri = Uri.parse(finalUrl)
 
-                // 2. FORCE SOURCE (Manual Switching)
                 val mediaSource: MediaSource = if (detectedMime == MimeTypes.APPLICATION_M3U8) {
-                    // Force HLS Mode for M3U8
+                    // FIX: DISABLED chunkless preparation.
+                    // This forces the player to read the playlist carefully, avoiding errors with blank lines or bad tags.
                     HlsMediaSource.Factory(dataSourceFactory)
-                        .setAllowChunklessPreparation(true)
+                        .setAllowChunklessPreparation(false) 
                         .createMediaSource(MediaItem.fromUri(uri))
                 } else {
-                    // Force Progressive (TS/MP4) for others
                     ProgressiveMediaSource.Factory(dataSourceFactory)
                         .createMediaSource(MediaItem.fromUri(uri))
                 }
@@ -276,8 +273,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
-
-
+    
         private fun showError(title: String, msg: String) {
         AlertDialog.Builder(this).setTitle(title).setMessage(msg).setPositiveButton("Close") { _, _ -> }.show()
     }
@@ -421,6 +417,7 @@ class MainActivity : AppCompatActivity() {
             }
             return true
         }
+
         if (epgContainer?.visibility != View.VISIBLE) {
             when(k) {
                 KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_CHANNEL_UP -> {
@@ -451,9 +448,16 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         } 
-        if (k == KeyEvent.KEYCODE_BACK) { if (epgContainer?.visibility == View.VISIBLE) { epgContainer?.visibility = View.GONE; return true } }
+        
+        if (k == KeyEvent.KEYCODE_BACK) {
+            if (epgContainer?.visibility == View.VISIBLE) { epgContainer?.visibility = View.GONE; return true }
+        }
+
         return super.onKeyDown(k, e)
     }
     
     override fun onDestroy() { super.onDestroy(); player?.release() }
 }
+
+    
+    
