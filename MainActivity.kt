@@ -42,6 +42,8 @@ import java.net.CookiePolicy
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
 import javax.net.ssl.*
+import androidx.media3.exoplayer.source.hls.HlsMediaSource
+
 
 class MainActivity : AppCompatActivity() {
     private var player: ExoPlayer? = null
