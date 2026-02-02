@@ -36,29 +36,18 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
-import androidx.media3.exoplayer.hls.HlsMediaSource
-import androidx.media3.exoplayer.source.ProgressiveMediaSource
-import androidx.media3.exoplayer.source.MediaSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import okhttp3.Cookie
-import okhttp3.CookieJar
-import okhttp3.HttpUrl
-import okhttp3.OkHttpClient
-import okhttp3.Request
 import java.net.CookieHandler
 import java.net.CookieManager
 import java.net.CookiePolicy
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
-import java.util.concurrent.TimeUnit
 import javax.net.ssl.*
 
 class MainActivity : AppCompatActivity() {
     private var player: ExoPlayer? = null
-    private lateinit var dataSourceFactory: DefaultDataSource.Factory
-    
     private var drawerLayout: DrawerLayout? = null
     private var epgContainer: LinearLayout? = null
     private var rvGroups: RecyclerView? = null
@@ -77,25 +66,7 @@ class MainActivity : AppCompatActivity() {
     private val handler = Handler(Looper.getMainLooper())
     private val PICK_FILE = 101
 
-    private class BridgeCookieJar : CookieJar {
-        private val manager = java.net.CookieManager.getDefault() as java.net.CookieManager
-        override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
-            val cookieStore = manager.cookieStore
-            cookies.forEach { 
-                val javaCookie = java.net.HttpCookie(it.name, it.value)
-                javaCookie.domain = it.domain
-                javaCookie.path = it.path
-                cookieStore.add(url.toUri(), javaCookie)
-            }
-        }
-        override fun loadForRequest(url: HttpUrl): List<Cookie> {
-            val cookieStore = manager.cookieStore
-            return cookieStore.get(url.toUri()).map { 
-                Cookie.Builder().name(it.name).value(it.value).domain(url.host).path(url.encodedPath).build() 
-            }
-        }
-    }
-
+    // --- GLOBAL TRUST-ALL SSL ---
     private fun applyGlobalTrustAllSSL() {
         try {
             val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
@@ -110,22 +81,16 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) { e.printStackTrace() }
     }
 
-    private val resolverClient by lazy {
-        OkHttpClient.Builder()
-            .cookieJar(BridgeCookieJar())
-            .followRedirects(true)
-            .followSslRedirects(true)
-            .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(15, TimeUnit.SECONDS)
-            .hostnameVerifier { _, _ -> true }
-            .build()
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        StrictMode.setThreadPolicy(StrictMode.ThreadPolicy.Builder().permitAll().build())
 
+        // Allow Network on Main Thread (Legacy IPTV fix)
+        val policy = StrictMode.ThreadPolicy.Builder().permitAll().build()
+        StrictMode.setThreadPolicy(policy)
+
+        // --- GLOBAL COOKIE MANAGER (ACCEPT ALL) ---
+        // This natively handles the cookies for ExoPlayer, fixing the 301/404 issues.
         val cookieManager = CookieManager()
         cookieManager.setCookiePolicy(CookiePolicy.ACCEPT_ALL)
         CookieHandler.setDefault(cookieManager)
@@ -176,18 +141,17 @@ class MainActivity : AppCompatActivity() {
     }
     
         private fun initializePlayer() {
-        // 1. ROBUST RENDERERS (Software Decode fallback)
-        // This ensures compatibility with weird codecs sometimes found in IPTV
+        // 1. ROBUST RENDERERS (Fallback to Software Decode if needed)
         val renderersFactory = DefaultRenderersFactory(this)
             .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
 
-        // 2. BUFFERING
+        // 2. BUFFERING (MPV Style: Large Buffer)
         val loadControl = DefaultLoadControl.Builder()
             .setAllocator(DefaultAllocator(true, C.DEFAULT_BUFFER_SEGMENT_SIZE))
             .setBufferDurationsMs(50000, 50000, 1000, 3000)
             .build()
 
-        // 3. HTTP FACTORY
+        // 3. HTTP FACTORY (Native)
         val httpFactory = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
             .setUserAgent("TiviMate/4.7.0") 
@@ -200,10 +164,13 @@ class MainActivity : AppCompatActivity() {
                 "Accept" to "*/*"
             ))
         
-        dataSourceFactory = DefaultDataSource.Factory(this, httpFactory)
+        val dataSourceFactory = DefaultDataSource.Factory(this, httpFactory)
         
-        player = ExoPlayer.Builder(this, renderersFactory) // Use the robust renderer
+        // Use DefaultMediaSourceFactory. It AUTOMATICALLY detects HLS vs TS vs MP4.
+        // We do NOT need to manually force HlsMediaSource if we set up the Headers correctly.
+        player = ExoPlayer.Builder(this, renderersFactory)
             .setLoadControl(loadControl)
+            .setMediaSourceFactory(DefaultMediaSourceFactory(this).setDataSourceFactory(dataSourceFactory))
             .build()
             
         val playerView = findViewById<PlayerView>(R.id.playerView)
@@ -211,66 +178,42 @@ class MainActivity : AppCompatActivity() {
         playerView?.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL
     }
 
-    private suspend fun resolveAndDetect(url: String): Pair<String, String?> {
-        return withContext(Dispatchers.IO) {
-            try {
-                if (url.contains(".ts")) return@withContext Pair(url, MimeTypes.VIDEO_MP2T)
-                if (url.contains(".m3u8")) return@withContext Pair(url, MimeTypes.APPLICATION_M3U8)
-
-                val req = Request.Builder().url(url).head().header("User-Agent", "TiviMate/4.7.0").build()
-                var resp = resolverClient.newCall(req).execute()
-                
-                if (!resp.isSuccessful) {
-                    resp.close()
-                    val getReq = Request.Builder().url(url).get().header("User-Agent", "TiviMate/4.7.0").build()
-                    resp = resolverClient.newCall(getReq).execute()
-                }
-
-                val finalUrl = resp.request.url.toString()
-                val contentType = resp.header("Content-Type", "")?.lowercase() ?: ""
-                resp.close()
-
-                val mimeType = when {
-                    finalUrl.contains(".m3u8") || contentType.contains("mpegurl") || contentType.contains("x-mpegurl") -> MimeTypes.APPLICATION_M3U8
-                    finalUrl.contains(".ts") || contentType.contains("mp2t") -> MimeTypes.VIDEO_MP2T
-                    else -> null
-                }
-                
-                return@withContext Pair(finalUrl, mimeType)
-            } catch (e: Exception) {
-                return@withContext Pair(url, null)
-            }
-        }
-    }
-
     private fun play(c: Channel) {
-        lifecycleScope.launch {
-            try {
-                currentChannel = c
-                repo.addRecent(c)
-                showChannelInfo(c)
+        // NO Manual Resolution. NO "Peek".
+        // We pass the raw URL directly to ExoPlayer so the Token/Session is used EXACTLY ONCE.
+        try {
+            currentChannel = c
+            repo.addRecent(c)
+            showChannelInfo(c)
 
-                val (finalUrl, detectedMime) = resolveAndDetect(c.url)
-                val uri = Uri.parse(finalUrl)
-
-                val mediaSource: MediaSource = if (detectedMime == MimeTypes.APPLICATION_M3U8) {
-                    // FIX: DISABLED chunkless preparation.
-                    // This forces the player to read the playlist carefully, avoiding errors with blank lines or bad tags.
-                    HlsMediaSource.Factory(dataSourceFactory)
-                        .setAllowChunklessPreparation(false) 
-                        .createMediaSource(MediaItem.fromUri(uri))
-                } else {
-                    ProgressiveMediaSource.Factory(dataSourceFactory)
-                        .createMediaSource(MediaItem.fromUri(uri))
-                }
-
-                player?.setMediaSource(mediaSource)
-                player?.prepare()
-                player?.play()
-                epgContainer?.visibility = View.GONE
-            } catch (e: Exception) { 
-                Toast.makeText(this@MainActivity, "Error: ${e.message}", Toast.LENGTH_SHORT).show() 
+            val rawUrl = c.url 
+            val builder = MediaItem.Builder().setUri(Uri.parse(rawUrl))
+            val lowerUrl = rawUrl.lowercase()
+            
+            // --- STRICT FORMAT HINTS ---
+            // Only force format if we are 100% sure. 
+            // For .php or redirects, we leave MimeType NULL so ExoPlayer reads the Server Headers.
+            
+            if (lowerUrl.contains(".m3u8")) {
+                builder.setMimeType(MimeTypes.APPLICATION_M3U8)
             }
+            else if (rawUrl.matches(Regex(".*\\/[0-9]+(\\?.*)?$"))) {
+                // Numeric IDs (e.g. .../2739) are ALWAYS MPEG-TS
+                builder.setMimeType(MimeTypes.VIDEO_MP2T)
+            }
+            // If it is .php, .ts, or anything else: LEAVE MIME TYPE EMPTY.
+            // ExoPlayer will follow the redirect, read "Content-Type: video/mp2t", and play it.
+            
+            if (c.drmLicense != null) {
+                builder.setDrmConfiguration(DrmConfiguration.Builder(C.WIDEVINE_UUID).setLicenseUri(c.drmLicense).build())
+            }
+            
+            player?.setMediaItem(builder.build())
+            player?.prepare()
+            player?.play()
+            epgContainer?.visibility = View.GONE
+        } catch (e: Exception) { 
+            Toast.makeText(this@MainActivity, "Error: ${e.message}", Toast.LENGTH_SHORT).show() 
         }
     }
     
