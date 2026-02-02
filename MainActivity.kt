@@ -162,10 +162,18 @@ class MainActivity : AppCompatActivity() {
             ))
         
         val dataSourceFactory = DefaultDataSource.Factory(this, httpFactory)
+        val mediaSourceFactory = DefaultMediaSourceFactory(this)
+    .setDataSourceFactory(dataSourceFactory)
+    .setLoadErrorHandlingPolicy(
+        androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy(5)
+    )
+    .setLiveTargetOffsetMs(0)
+    .setForceChunklessPreparation(false) // 🔥 ADD THIS
+    
         
         player = ExoPlayer.Builder(this)
             .setLoadControl(loadControl)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(this).setDataSourceFactory(dataSourceFactory))
+            .setMediaSourceFactory(mediaSourceFactory)
             .build()
             
         val playerView = findViewById<PlayerView>(R.id.playerView)
