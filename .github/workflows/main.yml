@@ -1,4 +1,4 @@
-name: Build TiviMate Pro Fixed V12 (Final)
+name: Build TiviMate Pro Fixed V13 (Desugaring Fix)
 
 on: [push, workflow_dispatch]
 
@@ -82,7 +82,7 @@ jobs:
         org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
         EOF
 
-        # 4. Settings.gradle (Classic Mode)
+        # 4. Settings.gradle
         cat <<EOF > settings.gradle
         pluginManagement {
             repositories {
@@ -95,7 +95,7 @@ jobs:
         include ':app'
         EOF
 
-        # 5. Root build.gradle (Includes Audio Repo)
+        # 5. Root build.gradle
         cat <<EOF > build.gradle
         buildscript {
             repositories { google(); mavenCentral() }
@@ -111,7 +111,7 @@ jobs:
         task clean(type: Delete) { delete rootProject.buildDir }
         EOF
 
-        # 6. App build.gradle (Includes FFmpeg & Native Packaging)
+        # 6. App build.gradle (UPDATED WITH DESUGARING)
         cat <<EOF > app/build.gradle
         plugins { id 'com.android.application'; id 'org.jetbrains.kotlin.android' }
         android {
@@ -119,13 +119,21 @@ jobs:
             compileSdk 34
             defaultConfig { applicationId 'com.iptv.player'; minSdk 21; targetSdk 34; versionCode 1; versionName '1.0' }
             buildFeatures { viewBinding true }
-            compileOptions { sourceCompatibility JavaVersion.VERSION_1_8; targetCompatibility JavaVersion.VERSION_1_8 }
+            compileOptions { 
+                // --- THE FIX FOR "CORE LIBRARY DESUGARING" ERROR ---
+                coreLibraryDesugaringEnabled true 
+                sourceCompatibility JavaVersion.VERSION_1_8
+                targetCompatibility JavaVersion.VERSION_1_8 
+            }
             kotlinOptions { jvmTarget = '1.8' }
             packagingOptions {
                 jniLibs { useLegacyPackaging true }
             }
         }
         dependencies {
+            // --- THE FIX FOR "CORE LIBRARY DESUGARING" ERROR ---
+            coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.0.4'
+
             implementation 'com.squareup.okhttp3:okhttp:4.12.0'
             implementation 'androidx.media3:media3-datasource-okhttp:1.3.1'
             implementation 'androidx.core:core-ktx:1.12.0'
@@ -233,5 +241,5 @@ jobs:
         gradle assembleDebug
 
     - uses: actions/upload-artifact@v4
-      with: { name: TiviClone-Pro-Final, path: app/build/outputs/apk/debug/app-debug.apk }
+      with: { name: TiviClone-Pro-Fixed, path: app/build/outputs/apk/debug/app-debug.apk }
       
