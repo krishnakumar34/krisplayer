@@ -1,4 +1,4 @@
-name: Build TiviMate Pro Fixed V10 (With Audio Fix)
+name: Build TiviMate Pro Fixed V11 (Classic Mode)
 
 on: [push, workflow_dispatch]
 
@@ -16,22 +16,20 @@ jobs:
         # STEP 1: CLEAN & INITIALIZE
         # ---------------------------------------------------------
         rm -f build.gradle settings.gradle gradle.properties
-        touch settings.gradle 
-        gradle wrapper --gradle-version 8.2
-        chmod +x gradlew
         
         # ---------------------------------------------------------
         # STEP 2: FILE SETUP
         # ---------------------------------------------------------
         mkdir -p app/src/main/java/com/iptv/player
         mkdir -p app/src/main/res/{layout,values,drawable,xml}
+        # Move any existing Kotlin files to the correct path
         mv *.kt app/src/main/java/com/iptv/player/ || true
 
         # ---------------------------------------------------------
         # STEP 3: GENERATE CONFIGURATION
         # ---------------------------------------------------------
         
-        # 1. Network Security Config
+        # 1. Network Security Config (Allow HTTP)
         cat <<EOF > app/src/main/res/xml/network_security_config.xml
         <?xml version="1.0" encoding="utf-8"?>
         <network-security-config>
@@ -69,39 +67,43 @@ jobs:
         </manifest>
         EOF
 
-        # 3. Gradle Properties
+        # 3. Gradle Properties (AndroidX Support)
         cat <<EOF > gradle.properties
         android.useAndroidX=true
         android.enableJetifier=true
         org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
         EOF
 
-        # 4. Settings.gradle (ADDED JELLYFIN REPO HERE)
+        # 4. Settings.gradle (FIXED: Removed Strict Mode to prevent conflict)
         cat <<EOF > settings.gradle
-        pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
-        dependencyResolutionManagement {
-            repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+        pluginManagement {
             repositories {
                 google()
                 mavenCentral()
-                maven { url 'https://maven.jellyfin.org/release' }  // <--- AUDIO FIX
+                gradlePluginPortal()
             }
         }
         rootProject.name = "TiviClonePro"
         include ':app'
         EOF
 
-        # 5. Root build.gradle
+        # 5. Root build.gradle (FIXED: Added Jellyfin Repo Here)
         cat <<EOF > build.gradle
         buildscript {
             repositories { google(); mavenCentral() }
             dependencies { classpath 'com.android.tools.build:gradle:8.2.0'; classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.0' }
         }
-        allprojects { repositories { google(); mavenCentral() } }
+        allprojects {
+            repositories {
+                google()
+                mavenCentral()
+                maven { url 'https://maven.jellyfin.org/release' }  // <--- AUDIO FIX REPO
+            }
+        }
         task clean(type: Delete) { delete rootProject.buildDir }
         EOF
 
-        # 6. App build.gradle (ADDED FFMPEG & PACKAGING)
+        # 6. App build.gradle
         cat <<EOF > app/build.gradle
         plugins { id 'com.android.application'; id 'org.jetbrains.kotlin.android' }
         android {
@@ -112,7 +114,7 @@ jobs:
             compileOptions { sourceCompatibility JavaVersion.VERSION_1_8; targetCompatibility JavaVersion.VERSION_1_8 }
             kotlinOptions { jvmTarget = '1.8' }
             packagingOptions {
-                jniLibs { useLegacyPackaging true } // <--- AUDIO FIX
+                jniLibs { useLegacyPackaging true } // <--- AUDIO FIX PACKAGING
             }
         }
         dependencies {
@@ -126,8 +128,8 @@ jobs:
             implementation 'androidx.media3:media3-ui:1.3.1'
             implementation 'androidx.media3:media3-exoplayer-hls:1.3.1'
             
-            // FFMPEG EXTENSION
-            implementation 'org.jellyfin.media3:media3-ffmpeg-decoder:1.3.1+2' // <--- AUDIO FIX
+            // FFMPEG EXTENSION (The Magic Fix for Audio)
+            implementation 'org.jellyfin.media3:media3-ffmpeg-decoder:1.3.1+2'
             
             implementation 'com.google.code.gson:gson:2.10.1'
             implementation 'androidx.drawerlayout:drawerlayout:1.2.0'
@@ -150,6 +152,7 @@ jobs:
         EOF
 
         # 8. Selector
+        mkdir -p app/src/main/res/drawable
         cat <<EOF > app/src/main/res/drawable/selector_item.xml
         <?xml version="1.0" encoding="utf-8"?>
         <selector xmlns:android="http://schemas.android.com/apk/res/android">
@@ -168,7 +171,8 @@ jobs:
                     android:layout_width="match_parent" android:layout_height="match_parent"
                     android:focusable="false" xmlns:app="http://schemas.android.com/apk/res-auto" 
                     app:use_controller="false"
-                    app:surface_type="texture_view" /> <LinearLayout android:id="@+id/epgContainer"
+                    app:surface_type="texture_view" />
+                <LinearLayout android:id="@+id/epgContainer"
                     android:layout_width="match_parent" android:layout_height="match_parent"
                     android:orientation="horizontal" android:background="@color/bg_overlay" android:visibility="gone" android:weightSum="10">
                     <androidx.recyclerview.widget.RecyclerView android:id="@+id/rvGroups" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="2" android:background="@color/bg_panel" android:paddingTop="8dp" android:descendantFocusability="afterDescendants"/>
@@ -218,8 +222,10 @@ jobs:
         # ---------------------------------------------------------
         # STEP 4: BUILD
         # ---------------------------------------------------------
+        gradle wrapper --gradle-version 8.2
+        chmod +x gradlew
         ./gradlew assembleDebug
 
     - uses: actions/upload-artifact@v4
-      with: { name: TiviClone-Pro-AudioFixed, path: app/build/outputs/apk/debug/app-debug.apk }
+      with: { name: TiviClone-Pro-Fixed, path: app/build/outputs/apk/debug/app-debug.apk }
       
