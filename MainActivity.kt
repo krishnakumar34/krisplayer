@@ -212,7 +212,7 @@ class MainActivity : AppCompatActivity() {
                 
                 val mime = when {
                      finalUrl.contains(".m3u8") || contentType.contains("mpegurl") -> MimeTypes.APPLICATION_M3U8
-                     finalUrl.contains(".ts") ||  finalurl.matches(Regex(".*\\/[0-9]+(\\?.*)?$")) || contentType.contains("mp2t") -> MimeTypes.VIDEO_MP2T
+                     finalUrl.contains(".ts") ||  finalUrl.matches(Regex(".*\\/[0-9]+(\\?.*)?$")) || contentType.contains("mp2t") -> MimeTypes.VIDEO_MP2T
                      else -> null
                 }
                 return@withContext Pair(finalUrl, mime)
@@ -452,4 +452,5 @@ class MainActivity : AppCompatActivity() {
     
 
     
+
 
