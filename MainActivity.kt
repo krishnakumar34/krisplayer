@@ -237,7 +237,9 @@ class MainActivity : AppCompatActivity() {
                     val headers = mapOf("User-Agent" to userAgent, "Cache-Control" to "no-cache", "Connection" to "close")
                     
                     val okHttpFactory = OkHttpDataSource.Factory(getUnsafeOkHttpClient()).setUserAgent(userAgent).setDefaultRequestProperties(headers)
-                    val dataSourceFactory = DefaultDataSource.Factory(this, okHttpFactory)
+                    
+                    // --- FIX IS HERE: Changed 'this' to 'this@MainActivity' ---
+                    val dataSourceFactory = DefaultDataSource.Factory(this@MainActivity, okHttpFactory)
 
                     // FIX: Allow NON-IDR Keyframes
                     val hlsExtractorFactory = DefaultHlsExtractorFactory(DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES, true)
@@ -446,3 +448,6 @@ class MainActivity : AppCompatActivity() {
     
     override fun onDestroy() { super.onDestroy(); player?.release() }
 }
+
+    
+    
