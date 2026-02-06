@@ -1,4 +1,4 @@
-name: Build TiviMate Pro Fixed V10
+name: Build TiviMate Pro Fixed V10 (With Audio Fix)
 
 on: [push, workflow_dispatch]
 
@@ -13,15 +13,10 @@ jobs:
     - name: Build APK
       run: |
         # ---------------------------------------------------------
-        # STEP 1: CLEAN & INITIALIZE (The Fix)
+        # STEP 1: CLEAN & INITIALIZE
         # ---------------------------------------------------------
-        # 1. Clear old configs
         rm -f build.gradle settings.gradle gradle.properties
-
-        # 2. CRITICAL: Create empty settings file so Gradle accepts this directory
         touch settings.gradle 
-
-        # 3. NOW we can safely generate the wrapper
         gradle wrapper --gradle-version 8.2
         chmod +x gradlew
         
@@ -30,12 +25,10 @@ jobs:
         # ---------------------------------------------------------
         mkdir -p app/src/main/java/com/iptv/player
         mkdir -p app/src/main/res/{layout,values,drawable,xml}
-        
-        # Move Kotlin files
         mv *.kt app/src/main/java/com/iptv/player/ || true
 
         # ---------------------------------------------------------
-        # STEP 3: GENERATE CONFIGURATION (HTTP + BYPASS)
+        # STEP 3: GENERATE CONFIGURATION
         # ---------------------------------------------------------
         
         # 1. Network Security Config
@@ -83,8 +76,20 @@ jobs:
         org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
         EOF
 
-        # 4. Settings.gradle (Overwrite the dummy one)
-        echo "include ':app'" > settings.gradle
+        # 4. Settings.gradle (ADDED JELLYFIN REPO HERE)
+        cat <<EOF > settings.gradle
+        pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+        dependencyResolutionManagement {
+            repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+            repositories {
+                google()
+                mavenCentral()
+                maven { url 'https://maven.jellyfin.org/release' }  // <--- AUDIO FIX
+            }
+        }
+        rootProject.name = "TiviClonePro"
+        include ':app'
+        EOF
 
         # 5. Root build.gradle
         cat <<EOF > build.gradle
@@ -96,7 +101,7 @@ jobs:
         task clean(type: Delete) { delete rootProject.buildDir }
         EOF
 
-        # 6. App build.gradle
+        # 6. App build.gradle (ADDED FFMPEG & PACKAGING)
         cat <<EOF > app/build.gradle
         plugins { id 'com.android.application'; id 'org.jetbrains.kotlin.android' }
         android {
@@ -106,19 +111,24 @@ jobs:
             buildFeatures { viewBinding true }
             compileOptions { sourceCompatibility JavaVersion.VERSION_1_8; targetCompatibility JavaVersion.VERSION_1_8 }
             kotlinOptions { jvmTarget = '1.8' }
+            packagingOptions {
+                jniLibs { useLegacyPackaging true } // <--- AUDIO FIX
+            }
         }
         dependencies {
-    
             implementation 'com.squareup.okhttp3:okhttp:4.12.0'
-            implementation 'androidx.media3:media3-datasource-okhttp:1.2.0'
+            implementation 'androidx.media3:media3-datasource-okhttp:1.3.1'
             implementation 'androidx.core:core-ktx:1.12.0'
             implementation 'androidx.appcompat:appcompat:1.6.1'
             implementation 'com.google.android.material:material:1.11.0'
             implementation 'androidx.recyclerview:recyclerview:1.3.2'
-            implementation 'androidx.media3:media3-exoplayer:1.2.0'
-            implementation 'androidx.media3:media3-ui:1.2.0'
-            implementation 'androidx.media3:media3-exoplayer-hls:1.2.0'
-            implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+            implementation 'androidx.media3:media3-exoplayer:1.3.1'
+            implementation 'androidx.media3:media3-ui:1.3.1'
+            implementation 'androidx.media3:media3-exoplayer-hls:1.3.1'
+            
+            // FFMPEG EXTENSION
+            implementation 'org.jellyfin.media3:media3-ffmpeg-decoder:1.3.1+2' // <--- AUDIO FIX
+            
             implementation 'com.google.code.gson:gson:2.10.1'
             implementation 'androidx.drawerlayout:drawerlayout:1.2.0'
             implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
@@ -156,8 +166,9 @@ jobs:
             <FrameLayout android:layout_width="match_parent" android:layout_height="match_parent" android:background="@color/bg_video">
                 <androidx.media3.ui.PlayerView android:id="@+id/playerView"
                     android:layout_width="match_parent" android:layout_height="match_parent"
-                    android:focusable="false" xmlns:app="http://schemas.android.com/apk/res-auto" app:use_controller="false" />
-                <LinearLayout android:id="@+id/epgContainer"
+                    android:focusable="false" xmlns:app="http://schemas.android.com/apk/res-auto" 
+                    app:use_controller="false"
+                    app:surface_type="texture_view" /> <LinearLayout android:id="@+id/epgContainer"
                     android:layout_width="match_parent" android:layout_height="match_parent"
                     android:orientation="horizontal" android:background="@color/bg_overlay" android:visibility="gone" android:weightSum="10">
                     <androidx.recyclerview.widget.RecyclerView android:id="@+id/rvGroups" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="2" android:background="@color/bg_panel" android:paddingTop="8dp" android:descendantFocusability="afterDescendants"/>
@@ -205,10 +216,10 @@ jobs:
         EOF
 
         # ---------------------------------------------------------
-        # STEP 4: BUILD (Safe Wrapper)
+        # STEP 4: BUILD
         # ---------------------------------------------------------
         ./gradlew assembleDebug
 
     - uses: actions/upload-artifact@v4
-      with: { name: TiviClone-Pro-APK, path: app/build/outputs/apk/debug/app-debug.apk }
+      with: { name: TiviClone-Pro-AudioFixed, path: app/build/outputs/apk/debug/app-debug.apk }
       
