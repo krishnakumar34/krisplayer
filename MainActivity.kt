@@ -234,7 +234,7 @@ class MainActivity : AppCompatActivity() {
 
                 if (mimeType == MimeTypes.APPLICATION_M3U8) {
                     val userAgent = "TiviMate/4.7.0"
-                    val headers = mapOf("User-Agent" to userAgent, "Cache-Control" to "no-cache", "Connection" to "close")
+                    val headers = mapOf("User-Agent" to userAgent)
                     
                     val okHttpFactory = OkHttpDataSource.Factory(getUnsafeOkHttpClient()).setUserAgent(userAgent).setDefaultRequestProperties(headers)
                     
@@ -450,4 +450,5 @@ class MainActivity : AppCompatActivity() {
 }
 
     
+
     
