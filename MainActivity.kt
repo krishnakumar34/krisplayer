@@ -30,8 +30,11 @@ import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.hls.DefaultHlsExtractorFactory
+import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.upstream.DefaultAllocator
+import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -73,7 +76,6 @@ class MainActivity : AppCompatActivity() {
     private val PICK_FILE = 101
 
     // --- SHARED COOKIES (Critical for 301 + 404 Fix) ---
-    // This allows the Resolver and the Player to share the same session.
     private class BridgeCookieJar : CookieJar {
         private val manager = java.net.CookieManager.getDefault() as java.net.CookieManager
         override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
@@ -106,7 +108,7 @@ class MainActivity : AppCompatActivity() {
         return OkHttpClient.Builder()
             .sslSocketFactory(sslContext.socketFactory, trustAllCerts[0] as X509TrustManager)
             .hostnameVerifier { _, _ -> true }
-            .cookieJar(BridgeCookieJar()) // Shared Cookies
+            .cookieJar(BridgeCookieJar())
             .followRedirects(true)
             .followSslRedirects(true)
             .connectTimeout(30, TimeUnit.SECONDS)
@@ -114,7 +116,6 @@ class MainActivity : AppCompatActivity() {
             .build()
     }
 
-    // Client for Manual Resolution
     private val resolverClient by lazy { getUnsafeOkHttpClient() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -122,7 +123,6 @@ class MainActivity : AppCompatActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         StrictMode.setThreadPolicy(StrictMode.ThreadPolicy.Builder().permitAll().build())
 
-        // Global Cookies
         val cookieManager = CookieManager()
         cookieManager.setCookiePolicy(CookiePolicy.ACCEPT_ALL)
         CookieHandler.setDefault(cookieManager)
@@ -149,7 +149,6 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) { e.printStackTrace(); showError("Init Error", "${e.message}") }
     }
     
-    // ... setupChannelInfoOverlay() ... (Same as before)
     private fun setupChannelInfoOverlay() {
         val root = findViewById<FrameLayout>(android.R.id.content) ?: return
         tvChannelInfo = TextView(this).apply {
@@ -171,47 +170,36 @@ class MainActivity : AppCompatActivity() {
         }
     }
     
-        private fun initializePlayer() {
+    private fun initializePlayer() {
+        // --- 1. RENDERERS FACTORY (Force Extension Mode) ---
         val renderersFactory = DefaultRenderersFactory(this)
             .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
 
+        // --- 2. LOAD CONTROL ---
         val loadControl = DefaultLoadControl.Builder()
             .setAllocator(DefaultAllocator(true, C.DEFAULT_BUFFER_SEGMENT_SIZE))
-            .setBufferDurationsMs(50000, 50000, 1000, 3000)
+            .setBufferDurationsMs(50000, 50000, 1500, 3000)
             .build()
 
-        // USE OKHTTP SOURCE (Better for IPTV than DefaultHttpDataSource)
-        val okHttpFactory = OkHttpDataSource.Factory(getUnsafeOkHttpClient())
-            .setUserAgent("TiviMate/4.7.0")
-        
-        val dataSourceFactory = DefaultDataSource.Factory(this, okHttpFactory)
-        
-        // Use DefaultMediaSourceFactory (Auto-detects HLS/TS)
+        // --- 3. BUILD PLAYER ---
         player = ExoPlayer.Builder(this, renderersFactory)
             .setLoadControl(loadControl)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(this).setDataSourceFactory(dataSourceFactory))
             .build()
             
         val playerView = findViewById<PlayerView>(R.id.playerView)
         playerView?.player = player
         playerView?.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL
     }
-
-    // --- MANUAL RESOLVER (Fixed for Tokens) ---
+        // --- MANUAL RESOLVER ---
     private suspend fun resolveUrl(url: String): Pair<String, String?> {
         return withContext(Dispatchers.IO) {
-            // 1. SKIP Check for Token Links (Prevents 404)
-            // If the URL already has a token, we assume it's direct and don't touch it.
             if (url.contains("token=") || url.contains("?t=")) {
                  return@withContext Pair(url, null)
             }
-            
-            // 2. Resolve PHP / Short Links
             try {
                 val req = Request.Builder().url(url).head().header("User-Agent", "TiviMate/4.7.0").build()
                 var resp = resolverClient.newCall(req).execute()
                 
-                // Fallback to GET if HEAD fails
                 if (!resp.isSuccessful || resp.code == 405) {
                     resp.close()
                     val getReq = Request.Builder().url(url).get().header("User-Agent", "TiviMate/4.7.0").build()
@@ -222,13 +210,11 @@ class MainActivity : AppCompatActivity() {
                 val contentType = resp.header("Content-Type", "")?.lowercase() ?: ""
                 resp.close()
                 
-                // Detect Type
                 val mime = when {
                      finalUrl.contains(".m3u8") || contentType.contains("mpegurl") -> MimeTypes.APPLICATION_M3U8
                      finalUrl.contains(".ts") || contentType.contains("mp2t") -> MimeTypes.VIDEO_MP2T
                      else -> null
                 }
-                
                 return@withContext Pair(finalUrl, mime)
             } catch (e: Exception) {
                 return@withContext Pair(url, null)
@@ -243,32 +229,40 @@ class MainActivity : AppCompatActivity() {
                 repo.addRecent(c)
                 showChannelInfo(c)
 
-                // 1. Resolve (Smart Mode: Skips tokens)
                 val (finalUrl, detectedMime) = resolveUrl(c.url)
-                val builder = MediaItem.Builder().setUri(Uri.parse(finalUrl))
-                
-                // 2. Set MimeType only if confirmed
-                if (detectedMime != null) {
-                    builder.setMimeType(detectedMime)
-                } else if (finalUrl.matches(Regex(".*\\/[0-9]+(\\?.*)?$"))) {
-                     builder.setMimeType(MimeTypes.VIDEO_MP2T)
+                val mimeType = if (detectedMime != null) detectedMime else if (finalUrl.matches(Regex(".*\\/[0-9]+(\\?.*)?$"))) MimeTypes.VIDEO_MP2T else MimeTypes.APPLICATION_M3U8
+
+                if (mimeType == MimeTypes.APPLICATION_M3U8) {
+                    val userAgent = "TiviMate/4.7.0"
+                    val headers = mapOf("User-Agent" to userAgent, "Cache-Control" to "no-cache", "Connection" to "close")
+                    
+                    val okHttpFactory = OkHttpDataSource.Factory(getUnsafeOkHttpClient()).setUserAgent(userAgent).setDefaultRequestProperties(headers)
+                    val dataSourceFactory = DefaultDataSource.Factory(this, okHttpFactory)
+
+                    // FIX: Allow NON-IDR Keyframes
+                    val hlsExtractorFactory = DefaultHlsExtractorFactory(DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES, true)
+
+                    val builder = MediaItem.Builder().setUri(Uri.parse(finalUrl)).setMimeType(MimeTypes.APPLICATION_M3U8)
+                        .setLiveConfiguration(MediaItem.LiveConfiguration.Builder().setTargetOffsetMs(15000).setMaxPlaybackSpeed(1.02f).build())
+
+                    if (c.drmLicense != null) builder.setDrmConfiguration(DrmConfiguration.Builder(C.WIDEVINE_UUID).setLicenseUri(c.drmLicense).build())
+
+                    val mediaSource = HlsMediaSource.Factory(dataSourceFactory).setExtractorFactory(hlsExtractorFactory).setAllowChunklessPreparation(false).createMediaSource(builder.build())
+                    player?.setMediaSource(mediaSource)
+                } else {
+                    val builder = MediaItem.Builder().setUri(Uri.parse(finalUrl)).setMimeType(mimeType)
+                    if (c.drmLicense != null) builder.setDrmConfiguration(DrmConfiguration.Builder(C.WIDEVINE_UUID).setLicenseUri(c.drmLicense).build())
+                    player?.setMediaItem(builder.build())
                 }
                 
-                if (c.drmLicense != null) {
-                    builder.setDrmConfiguration(DrmConfiguration.Builder(C.WIDEVINE_UUID).setLicenseUri(c.drmLicense).build())
-                }
-                
-                player?.setMediaItem(builder.build())
                 player?.prepare()
                 player?.play()
                 epgContainer?.visibility = View.GONE
-            } catch (e: Exception) { 
-                Toast.makeText(this@MainActivity, "Error: ${e.message}", Toast.LENGTH_SHORT).show() 
-            }
+            } catch (e: Exception) { Toast.makeText(this@MainActivity, "Error: ${e.message}", Toast.LENGTH_SHORT).show() }
         }
     }
     
-        private fun showError(title: String, msg: String) {
+    private fun showError(title: String, msg: String) {
         AlertDialog.Builder(this).setTitle(title).setMessage(msg).setPositiveButton("Close") { _, _ -> }.show()
     }
 
@@ -452,7 +446,3 @@ class MainActivity : AppCompatActivity() {
     
     override fun onDestroy() { super.onDestroy(); player?.release() }
 }
-
-    
-    
-    
