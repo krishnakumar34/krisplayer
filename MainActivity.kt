@@ -1,4 +1,4 @@
-package com.iptv.player
+ package com.iptv.player
 
 import android.app.Activity
 import android.app.AlertDialog
@@ -193,7 +193,7 @@ class MainActivity : AppCompatActivity() {
         // --- MANUAL RESOLVER ---
     private suspend fun resolveUrl(url: String): Pair<String, String?> {
         return withContext(Dispatchers.IO) {
-            if (url.contains("token=") || url.contains("?t=")) {
+            if (url.contains(".m3u8?token=") || url.contains("?t=")) {
                  return@withContext Pair(url, null)
             }
             try {
@@ -452,5 +452,6 @@ class MainActivity : AppCompatActivity() {
     
 
     
+
 
 
