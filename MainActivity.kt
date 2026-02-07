@@ -29,14 +29,15 @@ import androidx.media3.common.MimeTypes
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
-import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.Renderer
+import androidx.media3.exoplayer.RenderersFactory
 import androidx.media3.exoplayer.hls.DefaultHlsExtractorFactory
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
+import androidx.media3.exoplayer.mediacodec.DefaultMediaCodecAdapterFactory
 import androidx.media3.exoplayer.video.MediaCodecVideoRenderer
-import androidx.media3.exoplayer.video.VideoRendererEventListener
+import androidx.media3.exoplayer.audio.MediaCodecAudioRenderer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.upstream.DefaultAllocator
 import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory
@@ -81,7 +82,6 @@ class MainActivity : AppCompatActivity() {
     private val handler = Handler(Looper.getMainLooper())
     private val PICK_FILE = 101
 
-    // --- SHARED COOKIES (Critical for 301 + 404 Fix) ---
     private class BridgeCookieJar : CookieJar {
         private val manager = java.net.CookieManager.getDefault() as java.net.CookieManager
         override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
@@ -101,7 +101,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // --- UNSAFE CLIENT (Ignores SSL, Follows Redirects) ---
     private fun getUnsafeOkHttpClient(): OkHttpClient {
         val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
             override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
@@ -123,6 +122,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private val resolverClient by lazy { getUnsafeOkHttpClient() }
+
 
         override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -176,32 +176,51 @@ class MainActivity : AppCompatActivity() {
         }
     }
     
-    // --- 1. DEFINE A CUSTOM FACTORY TO BLOCK FFMPEG VIDEO ---
-    // This fixes the freezing issue by forcing Hardware Video Decoding
-    private fun createSafeRenderersFactory(): DefaultRenderersFactory {
-        return object : DefaultRenderersFactory(this) {
-            override fun buildVideoRenderers(
-                context: Context,
-                eventHandler: VideoRendererEventListener,
-                out: ArrayList<Renderer>
-            ) {
-                // FORCE HARDWARE VIDEO ONLY
-                out.add(
-                    MediaCodecVideoRenderer(
-                        context,
-                        MediaCodecSelector.DEFAULT,
-                        allowedVideoJoiningTimeMs,
-                        eventHandler,
-                        eventHandler, 
-                        -1
-                    )
+    // --- SAFE RENDERER FACTORY (Fixes Build Errors & Freezing) ---
+    private fun createSafeRenderersFactory(): RenderersFactory {
+        return RenderersFactory { handler, videoListener, audioListener, textOutput, metadataOutput ->
+            val renderers = ArrayList<Renderer>()
+
+            // 1. Hardware Video (Using DefaultMediaCodecAdapterFactory)
+            renderers.add(
+                MediaCodecVideoRenderer(
+                    this@MainActivity,
+                    DefaultMediaCodecAdapterFactory(this@MainActivity),
+                    MediaCodecSelector.DEFAULT,
+                    5000L, // allowedJoiningTimeMs
+                    false, // enableDecoderFallback
+                    handler,
+                    videoListener,
+                    50     // maxDroppedFrames
                 )
+            )
+
+            // 2. Hardware Audio
+            renderers.add(
+                MediaCodecAudioRenderer(
+                    this@MainActivity,
+                    MediaCodecSelector.DEFAULT,
+                    handler,
+                    audioListener
+                )
+            )
+            
+            // 3. Software Audio (FFmpeg - loaded dynamically to allow fallback)
+            try {
+                val clazz = Class.forName("androidx.media3.decoder.ffmpeg.FfmpegAudioRenderer")
+                val constructor = clazz.getConstructor(Handler::class.java, androidx.media3.exoplayer.audio.AudioRendererEventListener::class.java)
+                val renderer = constructor.newInstance(handler, audioListener) as Renderer
+                renderers.add(renderer)
+            } catch (e: Exception) {
+                // Ignore if library missing
             }
-        }.setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
+
+            renderers.toTypedArray()
+        }
     }
 
     private fun initializePlayer() {
-        // --- 2. USE THE CUSTOM FACTORY ---
+        // USE THE CUSTOM FACTORY
         val renderersFactory = createSafeRenderersFactory()
 
         val loadControl = DefaultLoadControl.Builder()
@@ -209,7 +228,6 @@ class MainActivity : AppCompatActivity() {
             .setBufferDurationsMs(50000, 50000, 1500, 3000)
             .build()
 
-        // --- 3. BUILD PLAYER ---
         player = ExoPlayer.Builder(this, renderersFactory)
             .setLoadControl(loadControl)
             .build()
@@ -220,8 +238,8 @@ class MainActivity : AppCompatActivity() {
     }
 
 
-        // --- MANUAL RESOLVER (Fixed: Removes 'token' restriction) ---
-    private suspend fun resolveUrl(url: String): Pair<String, String?> {
+
+        private suspend fun resolveUrl(url: String): Pair<String, String?> {
         return withContext(Dispatchers.IO) {
             try {
                 val req = Request.Builder()
@@ -232,7 +250,6 @@ class MainActivity : AppCompatActivity() {
                 
                 var resp = resolverClient.newCall(req).execute()
                 
-                // If HEAD fails, try GET
                 if (!resp.isSuccessful || resp.code == 405) {
                     resp.close()
                     val getReq = Request.Builder()
@@ -269,19 +286,8 @@ class MainActivity : AppCompatActivity() {
                 repo.addRecent(c)
                 showChannelInfo(c)
 
-                // 1. Resolve URL (New Logic)
                 val (finalUrl, detectedMime) = resolveUrl(c.url)
-                
-                // 2. Smart MIME Fallback
-                val mimeType = if (detectedMime != null) {
-                    detectedMime
-                } else if (finalUrl.contains(".m3u8")) {
-                    MimeTypes.APPLICATION_M3U8
-                } else if (finalUrl.matches(Regex(".*\\/[0-9]+(\\?.*)?$"))) {
-                    MimeTypes.VIDEO_MP2T 
-                } else {
-                    MimeTypes.APPLICATION_M3U8 
-                }
+                val mimeType = if (detectedMime != null) detectedMime else if (finalUrl.contains(".m3u8")) MimeTypes.APPLICATION_M3U8 else MimeTypes.VIDEO_MP2T
 
                 if (mimeType == MimeTypes.APPLICATION_M3U8) {
                     val userAgent = "TiviMate/4.7.0"
@@ -292,18 +298,12 @@ class MainActivity : AppCompatActivity() {
                         .setDefaultRequestProperties(headers)
                     
                     val dataSourceFactory = DefaultDataSource.Factory(this@MainActivity, okHttpFactory)
-
                     val hlsExtractorFactory = DefaultHlsExtractorFactory(DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES, true)
 
                     val builder = MediaItem.Builder()
                         .setUri(Uri.parse(finalUrl))
                         .setMimeType(MimeTypes.APPLICATION_M3U8)
-                        .setLiveConfiguration(
-                            MediaItem.LiveConfiguration.Builder()
-                                .setTargetOffsetMs(15000)
-                                .setMaxPlaybackSpeed(1.02f)
-                                .build()
-                        )
+                        .setLiveConfiguration(MediaItem.LiveConfiguration.Builder().setTargetOffsetMs(15000).setMaxPlaybackSpeed(1.02f).build())
 
                     if (c.drmLicense != null) {
                         builder.setDrmConfiguration(DrmConfiguration.Builder(C.WIDEVINE_UUID).setLicenseUri(c.drmLicense).build())
@@ -316,13 +316,8 @@ class MainActivity : AppCompatActivity() {
                         
                     player?.setMediaSource(mediaSource)
                 } else {
-                    val builder = MediaItem.Builder()
-                        .setUri(Uri.parse(finalUrl))
-                        .setMimeType(mimeType)
-                    
-                    if (c.drmLicense != null) {
-                        builder.setDrmConfiguration(DrmConfiguration.Builder(C.WIDEVINE_UUID).setLicenseUri(c.drmLicense).build())
-                    }
+                    val builder = MediaItem.Builder().setUri(Uri.parse(finalUrl)).setMimeType(mimeType)
+                    if (c.drmLicense != null) builder.setDrmConfiguration(DrmConfiguration.Builder(C.WIDEVINE_UUID).setLicenseUri(c.drmLicense).build())
                     player?.setMediaItem(builder.build())
                 }
                 
