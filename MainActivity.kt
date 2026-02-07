@@ -450,15 +450,20 @@ class MainActivity : AppCompatActivity() {
     fun focusGroupList() { rvGroups?.requestFocus() }
     fun focusChannelList() { rvChannels?.requestFocus() }
 
-    override fun onKeyDown(k: Int, e: KeyEvent?): Boolean {
+        override fun onKeyDown(k: Int, e: KeyEvent?): Boolean {
+        // 1. If Side Settings Drawer is Open -> Back closes it
         if (drawerLayout?.isDrawerOpen(Gravity.END) == true) {
             if (k == KeyEvent.KEYCODE_BACK) { drawerLayout?.closeDrawers(); return true }
             return super.onKeyDown(k, e) 
         }
+
+        // 2. If Search is Open -> Back closes it
         if (searchContainer?.visibility == View.VISIBLE) {
             if (k == KeyEvent.KEYCODE_BACK) { closeSearch(); return true }
             return super.onKeyDown(k, e)
         }
+
+        // 3. Number Keys (0-9) for Direct Channel Entry
         if (k in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9) {
             numBuffer += (k - KeyEvent.KEYCODE_0)
             findViewById<TextView>(R.id.tvOverlayNum)?.let { tv ->
@@ -472,8 +477,10 @@ class MainActivity : AppCompatActivity() {
             return true
         }
 
+        // 4. IF EPG IS HIDDEN (Video is playing full screen)
         if (epgContainer?.visibility != View.VISIBLE) {
             when(k) {
+                // Channel Zapping (Up/Down)
                 KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_CHANNEL_UP -> {
                     currentChannel?.let { curr ->
                         val idx = allChannelsFlat.indexOf(curr)
@@ -488,6 +495,8 @@ class MainActivity : AppCompatActivity() {
                     }
                     return true
                 }
+                
+                // Open Settings Drawer (Right)
                 KeyEvent.KEYCODE_DPAD_RIGHT -> { 
                     drawerLayout?.openDrawer(Gravity.END)
                     updateSettingsDrawer()
@@ -495,22 +504,42 @@ class MainActivity : AppCompatActivity() {
                     root?.postDelayed({ root.findViewWithTag<View>("first")?.requestFocus() }, 100)
                     return true 
                 }
-                KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_MENU -> {
+
+                // --- NEW LOGIC START ---
+                // OK/CENTER -> Toggle Player Controls (Pause/Audio/Quality)
+                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
+                    val playerView = findViewById<PlayerView>(R.id.playerView)
+                    if (playerView?.isControllerFullyVisible == true) {
+                        playerView.hideController()
+                    } else {
+                        playerView?.showController()
+                    }
+                    return true
+                }
+
+                // MENU BUTTON -> Open EPG (Channel List)
+                KeyEvent.KEYCODE_MENU -> {
                     epgContainer?.visibility = View.VISIBLE
                     rvGroups?.requestFocus()
                     return true
                 }
+                // --- NEW LOGIC END ---
             }
         } 
         
+        // 5. If EPG is Open -> Back closes it
         if (k == KeyEvent.KEYCODE_BACK) {
-            if (epgContainer?.visibility == View.VISIBLE) { epgContainer?.visibility = View.GONE; return true }
+            if (epgContainer?.visibility == View.VISIBLE) { 
+                epgContainer?.visibility = View.GONE
+                return true 
+            }
         }
 
         return super.onKeyDown(k, e)
-    }
-    
+        }
+        
     override fun onDestroy() { super.onDestroy(); player?.release() }
 }
 
     
+
