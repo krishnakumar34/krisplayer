@@ -450,38 +450,49 @@ class MainActivity : AppCompatActivity() {
     fun focusGroupList() { rvGroups?.requestFocus() }
     fun focusChannelList() { rvChannels?.requestFocus() }
 
-            override fun onKeyDown(k: Int, e: KeyEvent?): Boolean {
-        // 1. If Side Settings Drawer is Open -> Back closes it
+                override fun onKeyDown(k: Int, e: KeyEvent?): Boolean {
+        // 1. If Side Drawer or Search is Open, Back closes them
         if (drawerLayout?.isDrawerOpen(Gravity.END) == true) {
             if (k == KeyEvent.KEYCODE_BACK) { drawerLayout?.closeDrawers(); return true }
             return super.onKeyDown(k, e) 
         }
-
-        // 2. If Search is Open -> Back closes it
         if (searchContainer?.visibility == View.VISIBLE) {
             if (k == KeyEvent.KEYCODE_BACK) { closeSearch(); return true }
             return super.onKeyDown(k, e)
         }
 
-        // 3. Number Keys (0-9) for Direct Channel Entry
+        // 2. Number Keys (0-9)
         if (k in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9) {
+            // ... (Keep existing number logic here) ...
             numBuffer += (k - KeyEvent.KEYCODE_0)
             findViewById<TextView>(R.id.tvOverlayNum)?.let { tv ->
                 tv.text = numBuffer; tv.visibility = View.VISIBLE
                 handler.removeCallbacksAndMessages(null)
                 handler.postDelayed({
-                    allChannelsFlat.find { it.number.toString() == numBuffer }?.let { play(it) } ?: Toast.makeText(this, "Channel $numBuffer not found", Toast.LENGTH_SHORT).show()
+                    allChannelsFlat.find { it.number.toString() == numBuffer }?.let { play(it) } 
                     numBuffer = ""; tv.visibility = View.GONE
                 }, 2000)
             }
             return true
         }
 
-        // 4. PLAYER CONTROLS & NAVIGATION
-        // If EPG is HIDDEN (Video is playing full screen)
+        // 3. VIDEO NAVIGATION LOGIC
         if (epgContainer?.visibility != View.VISIBLE) {
+            val playerView = findViewById<PlayerView>(R.id.playerView)
+            
+            // --- NEW PRIORITY CHECK ---
+            // If Player Controls (Scrubber/Pause) are visible, let System handle navigation (Seek)
+            if (playerView?.isControllerFullyVisible == true) {
+                if (k == KeyEvent.KEYCODE_BACK) {
+                    playerView.hideController() // Back hides controls first
+                    return true
+                }
+                return super.onKeyDown(k, e) // Let D-Pad move the Seek Bar!
+            }
+
+            // If Controls are HIDDEN, use Custom Shortcuts
             when(k) {
-                // Channel Zapping (Up/Down)
+                // Channel Zapping
                 KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_CHANNEL_UP -> {
                     currentChannel?.let { curr ->
                         val idx = allChannelsFlat.indexOf(curr)
@@ -497,7 +508,7 @@ class MainActivity : AppCompatActivity() {
                     return true
                 }
                 
-                // Open Settings Drawer (Right)
+                // Open Settings Drawer (Only when controls are hidden)
                 KeyEvent.KEYCODE_DPAD_RIGHT -> { 
                     drawerLayout?.openDrawer(Gravity.END)
                     updateSettingsDrawer()
@@ -506,46 +517,40 @@ class MainActivity : AppCompatActivity() {
                     return true 
                 }
 
-                // OK/CENTER -> Toggle Player Controls
+                // Show Player Controls
                 KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
-                    val playerView = findViewById<PlayerView>(R.id.playerView)
-                    if (playerView?.isControllerFullyVisible == true) {
-                        playerView.hideController()
-                    } else {
-                        playerView?.showController()
-                    }
+                    playerView?.showController()
                     return true
                 }
 
-                // MENU BUTTON -> Open EPG
-                KeyEvent.KEYCODE_MENU -> {
+                // Open EPG
+                KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_DPAD_LEFT -> {
                     epgContainer?.visibility = View.VISIBLE
                     rvGroups?.requestFocus()
                     return true
                 }
-
-                // BACK BUTTON (While watching video) -> OPEN EPG
+                
+                // Open EPG on Back
                 KeyEvent.KEYCODE_BACK -> {
                     epgContainer?.visibility = View.VISIBLE
                     rvGroups?.requestFocus()
-                    return true // Consumes the event so app doesn't close
+                    return true
                 }
             }
         } 
         
-        // 5. IF EPG IS VISIBLE -> Back button closes the app (Default behavior)
-        // You can change this to 'epgContainer?.visibility = View.GONE' if you want Back to just hide the list instead.
+        // 4. Default Back behavior (Close App if EPG is visible)
         if (k == KeyEvent.KEYCODE_BACK && epgContainer?.visibility == View.VISIBLE) {
-             // Let system handle it (Closes App)
              return super.onKeyDown(k, e)
         }
 
         return super.onKeyDown(k, e)
-            }
-            
+                }
+                
     override fun onDestroy() { super.onDestroy(); player?.release() }
 }
 
     
+
 
 
