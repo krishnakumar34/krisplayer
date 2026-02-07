@@ -1,5 +1,5 @@
 package com.iptv.player
-
+import android.app.Activity
 import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
@@ -501,3 +501,4 @@ class MainActivity : AppCompatActivity() {
 }
 
     
+
