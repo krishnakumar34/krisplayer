@@ -450,7 +450,7 @@ class MainActivity : AppCompatActivity() {
     fun focusGroupList() { rvGroups?.requestFocus() }
     fun focusChannelList() { rvChannels?.requestFocus() }
 
-        override fun onKeyDown(k: Int, e: KeyEvent?): Boolean {
+            override fun onKeyDown(k: Int, e: KeyEvent?): Boolean {
         // 1. If Side Settings Drawer is Open -> Back closes it
         if (drawerLayout?.isDrawerOpen(Gravity.END) == true) {
             if (k == KeyEvent.KEYCODE_BACK) { drawerLayout?.closeDrawers(); return true }
@@ -477,7 +477,8 @@ class MainActivity : AppCompatActivity() {
             return true
         }
 
-        // 4. IF EPG IS HIDDEN (Video is playing full screen)
+        // 4. PLAYER CONTROLS & NAVIGATION
+        // If EPG is HIDDEN (Video is playing full screen)
         if (epgContainer?.visibility != View.VISIBLE) {
             when(k) {
                 // Channel Zapping (Up/Down)
@@ -505,8 +506,7 @@ class MainActivity : AppCompatActivity() {
                     return true 
                 }
 
-                // --- NEW LOGIC START ---
-                // OK/CENTER -> Toggle Player Controls (Pause/Audio/Quality)
+                // OK/CENTER -> Toggle Player Controls
                 KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
                     val playerView = findViewById<PlayerView>(R.id.playerView)
                     if (playerView?.isControllerFullyVisible == true) {
@@ -517,29 +517,35 @@ class MainActivity : AppCompatActivity() {
                     return true
                 }
 
-                // MENU BUTTON -> Open EPG (Channel List)
+                // MENU BUTTON -> Open EPG
                 KeyEvent.KEYCODE_MENU -> {
                     epgContainer?.visibility = View.VISIBLE
                     rvGroups?.requestFocus()
                     return true
                 }
-                // --- NEW LOGIC END ---
+
+                // BACK BUTTON (While watching video) -> OPEN EPG
+                KeyEvent.KEYCODE_BACK -> {
+                    epgContainer?.visibility = View.VISIBLE
+                    rvGroups?.requestFocus()
+                    return true // Consumes the event so app doesn't close
+                }
             }
         } 
         
-        // 5. If EPG is Open -> Back closes it
-        if (k == KeyEvent.KEYCODE_BACK) {
-            if (epgContainer?.visibility == View.VISIBLE) { 
-                epgContainer?.visibility = View.GONE
-                return true 
-            }
+        // 5. IF EPG IS VISIBLE -> Back button closes the app (Default behavior)
+        // You can change this to 'epgContainer?.visibility = View.GONE' if you want Back to just hide the list instead.
+        if (k == KeyEvent.KEYCODE_BACK && epgContainer?.visibility == View.VISIBLE) {
+             // Let system handle it (Closes App)
+             return super.onKeyDown(k, e)
         }
 
         return super.onKeyDown(k, e)
-        }
-        
+            }
+            
     override fun onDestroy() { super.onDestroy(); player?.release() }
 }
 
     
+
 
