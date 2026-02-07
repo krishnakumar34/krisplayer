@@ -1,4 +1,4 @@
-name: Build TiviMate Pro Fixed V13 (Desugaring Fix)
+name: Build TiviMate Pro Fixed V14 (With Controls)
 
 on: [push, workflow_dispatch]
 
@@ -177,7 +177,7 @@ jobs:
         </selector>
         EOF
 
-        # 9. Main Layout
+        # 9. Main Layout (UPDATED: Added Controls)
         cat <<EOF > app/src/main/res/layout/activity_main.xml
         <?xml version="1.0" encoding="utf-8"?>
         <androidx.drawerlayout.widget.DrawerLayout xmlns:android="http://schemas.android.com/apk/res/android"
@@ -185,9 +185,13 @@ jobs:
             <FrameLayout android:layout_width="match_parent" android:layout_height="match_parent" android:background="@color/bg_video">
                 <androidx.media3.ui.PlayerView android:id="@+id/playerView"
                     android:layout_width="match_parent" android:layout_height="match_parent"
-                    android:focusable="false" xmlns:app="http://schemas.android.com/apk/res-auto" 
-                    app:use_controller="false"
-                    app:surface_type="texture_view" />
+                    xmlns:app="http://schemas.android.com/apk/res-auto" 
+                    android:focusable="true"
+                    app:surface_type="texture_view"
+                    app:resize_mode="fill"
+                    app:use_controller="true"
+                    app:show_timeout="5000"
+                    app:show_buffering="always" />
                 <LinearLayout android:id="@+id/epgContainer"
                     android:layout_width="match_parent" android:layout_height="match_parent"
                     android:orientation="horizontal" android:background="@color/bg_overlay" android:visibility="gone" android:weightSum="10">
@@ -241,5 +245,5 @@ jobs:
         gradle assembleDebug
 
     - uses: actions/upload-artifact@v4
-      with: { name: TiviClone-Pro-Fixed, path: app/build/outputs/apk/debug/app-debug.apk }
+      with: { name: TiviClone-Pro-Controls, path: app/build/outputs/apk/debug/app-debug.apk }
       
