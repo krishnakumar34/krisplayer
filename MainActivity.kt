@@ -1,6 +1,5 @@
 package com.iptv.player
 
-import android.app.Activity
 import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
@@ -10,7 +9,6 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.os.StrictMode
 import android.text.Editable
 import android.text.TextWatcher
 import android.view.Gravity
@@ -26,20 +24,24 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaItem.DrmConfiguration
 import androidx.media3.common.MimeTypes
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.Renderer
 import androidx.media3.exoplayer.RenderersFactory
+import androidx.media3.exoplayer.audio.AudioRendererEventListener
+import androidx.media3.exoplayer.audio.MediaCodecAudioRenderer
 import androidx.media3.exoplayer.hls.DefaultHlsExtractorFactory
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
-import androidx.media3.exoplayer.mediacodec.DefaultMediaCodecAdapterFactory
-import androidx.media3.exoplayer.video.MediaCodecVideoRenderer
-import androidx.media3.exoplayer.audio.MediaCodecAudioRenderer
+import androidx.media3.exoplayer.metadata.MetadataOutput
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.text.TextOutput
 import androidx.media3.exoplayer.upstream.DefaultAllocator
+import androidx.media3.exoplayer.video.MediaCodecVideoRenderer
+import androidx.media3.exoplayer.video.VideoRendererEventListener
 import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
@@ -62,6 +64,7 @@ import java.util.ArrayList
 import java.util.concurrent.TimeUnit
 import javax.net.ssl.*
 
+@UnstableApi 
 class MainActivity : AppCompatActivity() {
     private var player: ExoPlayer? = null
     private var drawerLayout: DrawerLayout? = null
@@ -120,15 +123,13 @@ class MainActivity : AppCompatActivity() {
             .readTimeout(30, TimeUnit.SECONDS)
             .build()
     }
-
     private val resolverClient by lazy { getUnsafeOkHttpClient() }
 
 
         override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        StrictMode.setThreadPolicy(StrictMode.ThreadPolicy.Builder().permitAll().build())
-
+        
         val cookieManager = CookieManager()
         cookieManager.setCookiePolicy(CookiePolicy.ACCEPT_ALL)
         CookieHandler.setDefault(cookieManager)
@@ -176,51 +177,58 @@ class MainActivity : AppCompatActivity() {
         }
     }
     
-    // --- SAFE RENDERER FACTORY (Fixes Build Errors & Freezing) ---
+    // --- FINAL SAFE RENDERER FACTORY ---
     private fun createSafeRenderersFactory(): RenderersFactory {
-        return RenderersFactory { handler, videoListener, audioListener, textOutput, metadataOutput ->
-            val renderers = ArrayList<Renderer>()
+        return object : RenderersFactory {
+            override fun createRenderers(
+                eventHandler: Handler,
+                videoRendererEventListener: VideoRendererEventListener,
+                audioRendererEventListener: AudioRendererEventListener,
+                textRendererOutput: TextOutput,
+                metadataRendererOutput: MetadataOutput
+            ): Array<Renderer> {
+                val renderers = ArrayList<Renderer>()
 
-            // 1. Hardware Video (Using DefaultMediaCodecAdapterFactory)
-            renderers.add(
-                MediaCodecVideoRenderer(
-                    this@MainActivity,
-                    DefaultMediaCodecAdapterFactory(this@MainActivity),
-                    MediaCodecSelector.DEFAULT,
-                    5000L, // allowedJoiningTimeMs
-                    false, // enableDecoderFallback
-                    handler,
-                    videoListener,
-                    50     // maxDroppedFrames
+                // 1. VIDEO: Use Standard Hardware Video (Fixes "Multiple Colors" artifacts)
+                // We use the simpler constructor to let Android pick the best colors
+                renderers.add(
+                    MediaCodecVideoRenderer(
+                        this@MainActivity,
+                        MediaCodecSelector.DEFAULT,
+                        5000L,
+                        eventHandler,
+                        videoRendererEventListener,
+                        50
+                    )
                 )
-            )
 
-            // 2. Hardware Audio
-            renderers.add(
-                MediaCodecAudioRenderer(
-                    this@MainActivity,
-                    MediaCodecSelector.DEFAULT,
-                    handler,
-                    audioListener
+                // 2. AUDIO: Hardware First (AAC, MP3)
+                renderers.add(
+                    MediaCodecAudioRenderer(
+                        this@MainActivity,
+                        MediaCodecSelector.DEFAULT,
+                        eventHandler,
+                        audioRendererEventListener
+                    )
                 )
-            )
-            
-            // 3. Software Audio (FFmpeg - loaded dynamically to allow fallback)
-            try {
-                val clazz = Class.forName("androidx.media3.decoder.ffmpeg.FfmpegAudioRenderer")
-                val constructor = clazz.getConstructor(Handler::class.java, androidx.media3.exoplayer.audio.AudioRendererEventListener::class.java)
-                val renderer = constructor.newInstance(handler, audioListener) as Renderer
-                renderers.add(renderer)
-            } catch (e: Exception) {
-                // Ignore if library missing
+
+                // 3. AUDIO: FFmpeg Software Fallback (AC3, EAC3)
+                // We explicitly reflectively load it to ensure it is added
+                try {
+                    val clazz = Class.forName("androidx.media3.decoder.ffmpeg.FfmpegAudioRenderer")
+                    val constructor = clazz.getConstructor(Handler::class.java, AudioRendererEventListener::class.java)
+                    val renderer = constructor.newInstance(eventHandler, audioRendererEventListener) as Renderer
+                    renderers.add(renderer)
+                } catch (e: Exception) {
+                    // e.printStackTrace() 
+                }
+
+                return renderers.toTypedArray()
             }
-
-            renderers.toTypedArray()
         }
     }
 
     private fun initializePlayer() {
-        // USE THE CUSTOM FACTORY
         val renderersFactory = createSafeRenderersFactory()
 
         val loadControl = DefaultLoadControl.Builder()
@@ -235,29 +243,20 @@ class MainActivity : AppCompatActivity() {
         val playerView = findViewById<PlayerView>(R.id.playerView)
         playerView?.player = player
         playerView?.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL
+        playerView?.controllerAutoShow = true
+        playerView?.controllerShowTimeoutMs = 3000
     }
-
 
 
         private suspend fun resolveUrl(url: String): Pair<String, String?> {
         return withContext(Dispatchers.IO) {
             try {
-                val req = Request.Builder()
-                    .url(url)
-                    .head()
-                    .header("User-Agent", "TiviMate/4.7.0")
-                    .build()
-                
+                val req = Request.Builder().url(url).head().header("User-Agent", "TiviMate/4.7.0").build()
                 var resp = resolverClient.newCall(req).execute()
                 
                 if (!resp.isSuccessful || resp.code == 405) {
                     resp.close()
-                    val getReq = Request.Builder()
-                        .url(url)
-                        .get()
-                        .header("User-Agent", "TiviMate/4.7.0")
-                        .header("Range", "bytes=0-10")
-                        .build()
+                    val getReq = Request.Builder().url(url).get().header("User-Agent", "TiviMate/4.7.0").header("Range", "bytes=0-10").build()
                     resp = resolverClient.newCall(getReq).execute()
                 }
 
@@ -271,11 +270,8 @@ class MainActivity : AppCompatActivity() {
                      contentType.contains("video/mp4") -> MimeTypes.VIDEO_MP4
                      else -> null
                 }
-                
                 return@withContext Pair(finalUrl, mime)
-            } catch (e: Exception) {
-                return@withContext Pair(url, null)
-            }
+            } catch (e: Exception) { return@withContext Pair(url, null) }
         }
     }
 
@@ -291,29 +287,16 @@ class MainActivity : AppCompatActivity() {
 
                 if (mimeType == MimeTypes.APPLICATION_M3U8) {
                     val userAgent = "TiviMate/4.7.0"
-                    val headers = mapOf("User-Agent" to userAgent)
-                    
-                    val okHttpFactory = OkHttpDataSource.Factory(getUnsafeOkHttpClient())
-                        .setUserAgent(userAgent)
-                        .setDefaultRequestProperties(headers)
-                    
+                    val okHttpFactory = OkHttpDataSource.Factory(getUnsafeOkHttpClient()).setUserAgent(userAgent)
                     val dataSourceFactory = DefaultDataSource.Factory(this@MainActivity, okHttpFactory)
                     val hlsExtractorFactory = DefaultHlsExtractorFactory(DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES, true)
 
-                    val builder = MediaItem.Builder()
-                        .setUri(Uri.parse(finalUrl))
-                        .setMimeType(MimeTypes.APPLICATION_M3U8)
+                    val builder = MediaItem.Builder().setUri(Uri.parse(finalUrl)).setMimeType(MimeTypes.APPLICATION_M3U8)
                         .setLiveConfiguration(MediaItem.LiveConfiguration.Builder().setTargetOffsetMs(15000).setMaxPlaybackSpeed(1.02f).build())
 
-                    if (c.drmLicense != null) {
-                        builder.setDrmConfiguration(DrmConfiguration.Builder(C.WIDEVINE_UUID).setLicenseUri(c.drmLicense).build())
-                    }
+                    if (c.drmLicense != null) builder.setDrmConfiguration(DrmConfiguration.Builder(C.WIDEVINE_UUID).setLicenseUri(c.drmLicense).build())
 
-                    val mediaSource = HlsMediaSource.Factory(dataSourceFactory)
-                        .setExtractorFactory(hlsExtractorFactory)
-                        .setAllowChunklessPreparation(false)
-                        .createMediaSource(builder.build())
-                        
+                    val mediaSource = HlsMediaSource.Factory(dataSourceFactory).setExtractorFactory(hlsExtractorFactory).setAllowChunklessPreparation(false).createMediaSource(builder.build())
                     player?.setMediaSource(mediaSource)
                 } else {
                     val builder = MediaItem.Builder().setUri(Uri.parse(finalUrl)).setMimeType(mimeType)
@@ -338,9 +321,7 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this@MainActivity, "Loading...", Toast.LENGTH_SHORT).show()
                 allData = M3uParser.parse(this@MainActivity, p, repo.getFavIds())
                 allChannelsFlat = allData.values.flatten().distinctBy { it.id }
-                
                 (rvChannels?.adapter as? ChannelAdapter)?.update(emptyList(), rvChannels)
-
                 rvGroups?.adapter = GroupAdapter(allData.keys.toList(), { group ->
                     val channels = allData[group] ?: emptyList()
                     (rvChannels?.adapter as? ChannelAdapter)?.update(channels, rvChannels)
@@ -349,13 +330,6 @@ class MainActivity : AppCompatActivity() {
                 if (allData.isNotEmpty()) {
                     val first = allData.keys.first()
                     rvChannels?.adapter = ChannelAdapter(allData[first] ?: emptyList(), { play(it) }, { toggleFav(it) }, { focusGroupList() })
-                    
-                    rvChannels?.setOnKeyListener { _, keyCode, event ->
-                        if (event.action == KeyEvent.ACTION_DOWN) {
-                            if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) { rvGroups?.requestFocus(); true }
-                            else if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) true else false
-                        } else false
-                    }
                     epgContainer?.visibility = View.VISIBLE
                     rvGroups?.requestFocus()
                 } else { Toast.makeText(this@MainActivity, "No channels!", Toast.LENGTH_LONG).show() }
@@ -450,8 +424,7 @@ class MainActivity : AppCompatActivity() {
     fun focusGroupList() { rvGroups?.requestFocus() }
     fun focusChannelList() { rvChannels?.requestFocus() }
 
-                override fun onKeyDown(k: Int, e: KeyEvent?): Boolean {
-        // 1. If Side Drawer or Search is Open, Back closes them
+    override fun onKeyDown(k: Int, e: KeyEvent?): Boolean {
         if (drawerLayout?.isDrawerOpen(Gravity.END) == true) {
             if (k == KeyEvent.KEYCODE_BACK) { drawerLayout?.closeDrawers(); return true }
             return super.onKeyDown(k, e) 
@@ -460,10 +433,7 @@ class MainActivity : AppCompatActivity() {
             if (k == KeyEvent.KEYCODE_BACK) { closeSearch(); return true }
             return super.onKeyDown(k, e)
         }
-
-        // 2. Number Keys (0-9)
         if (k in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9) {
-            // ... (Keep existing number logic here) ...
             numBuffer += (k - KeyEvent.KEYCODE_0)
             findViewById<TextView>(R.id.tvOverlayNum)?.let { tv ->
                 tv.text = numBuffer; tv.visibility = View.VISIBLE
@@ -476,23 +446,15 @@ class MainActivity : AppCompatActivity() {
             return true
         }
 
-        // 3. VIDEO NAVIGATION LOGIC
         if (epgContainer?.visibility != View.VISIBLE) {
             val playerView = findViewById<PlayerView>(R.id.playerView)
             
-            // --- NEW PRIORITY CHECK ---
-            // If Player Controls (Scrubber/Pause) are visible, let System handle navigation (Seek)
             if (playerView?.isControllerFullyVisible == true) {
-                if (k == KeyEvent.KEYCODE_BACK) {
-                    playerView.hideController() // Back hides controls first
-                    return true
-                }
-                return super.onKeyDown(k, e) // Let D-Pad move the Seek Bar!
+                if (k == KeyEvent.KEYCODE_BACK) { playerView.hideController(); return true }
+                return super.onKeyDown(k, e)
             }
 
-            // If Controls are HIDDEN, use Custom Shortcuts
             when(k) {
-                // Channel Zapping
                 KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_CHANNEL_UP -> {
                     currentChannel?.let { curr ->
                         val idx = allChannelsFlat.indexOf(curr)
@@ -507,8 +469,6 @@ class MainActivity : AppCompatActivity() {
                     }
                     return true
                 }
-                
-                // Open Settings Drawer (Only when controls are hidden)
                 KeyEvent.KEYCODE_DPAD_RIGHT -> { 
                     drawerLayout?.openDrawer(Gravity.END)
                     updateSettingsDrawer()
@@ -516,21 +476,15 @@ class MainActivity : AppCompatActivity() {
                     root?.postDelayed({ root.findViewWithTag<View>("first")?.requestFocus() }, 100)
                     return true 
                 }
-
-                // Show Player Controls
                 KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
                     playerView?.showController()
                     return true
                 }
-
-                // Open EPG
-                KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_DPAD_LEFT -> {
+                KeyEvent.KEYCODE_MENU -> {
                     epgContainer?.visibility = View.VISIBLE
                     rvGroups?.requestFocus()
                     return true
                 }
-                
-                // Open EPG on Back
                 KeyEvent.KEYCODE_BACK -> {
                     epgContainer?.visibility = View.VISIBLE
                     rvGroups?.requestFocus()
@@ -539,18 +493,11 @@ class MainActivity : AppCompatActivity() {
             }
         } 
         
-        // 4. Default Back behavior (Close App if EPG is visible)
-        if (k == KeyEvent.KEYCODE_BACK && epgContainer?.visibility == View.VISIBLE) {
-             return super.onKeyDown(k, e)
-        }
-
+        if (k == KeyEvent.KEYCODE_BACK && epgContainer?.visibility == View.VISIBLE) { return super.onKeyDown(k, e) }
         return super.onKeyDown(k, e)
-                }
-                
+    }
+    
     override fun onDestroy() { super.onDestroy(); player?.release() }
 }
 
     
-
-
-
