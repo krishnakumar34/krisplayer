@@ -1,148 +1,146 @@
 package com.iptv.player
 
 import android.graphics.Color
-import android.graphics.Typeface
-import android.view.KeyEvent
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.view.KeyEvent
 import android.widget.ImageView
-import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 
-// --- GROUP ADAPTER ---
+// --- GROUP ADAPTER (Fixed Navigation Logic) ---
 class GroupAdapter(
-    private val groups: List<String>,
-    private val onSelect: (String) -> Unit,
-    private val onFocusRight: () -> Unit // Callback for navigation
+    private val groups: List<String>, 
+    private val onSelect: (String)->Unit,
+    private val onFocusRight: ()->Unit // Callback for navigation
 ) : RecyclerView.Adapter<GroupAdapter.VH>() {
-
-    private var selectedPos = 0
-
-    inner class VH(v: View) : RecyclerView.ViewHolder(v) {
-        // Using built-in android layout text view
-        val tvName: TextView = v.findViewById(android.R.id.text1)
+    
+    var selectedPos = 0
+    
+    override fun onCreateViewHolder(p: ViewGroup, t: Int): VH {
+        val tv = TextView(p.context)
+        tv.setTextColor(Color.LTGRAY)
+        tv.textSize = 16f
+        tv.setPadding(32, 24, 32, 24)
+        tv.isFocusable = true
+        tv.isClickable = true
+        tv.setBackgroundResource(R.drawable.selector_item)
+        tv.layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        return VH(tv)
     }
 
-    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
-        val v = LayoutInflater.from(parent.context).inflate(android.R.layout.simple_list_item_1, parent, false)
-        return VH(v)
-    }
-
-    override fun onBindViewHolder(holder: VH, position: Int) {
-        val group = groups[position]
-        holder.tvName.text = group
+    override fun onBindViewHolder(h: VH, pos: Int) {
+        val tv = h.itemView as TextView
+        tv.text = groups[pos]
         
-        // Highlight logic
-        val isSelected = (selectedPos == position)
-        holder.tvName.setTextColor(if (isSelected) Color.CYAN else Color.LTGRAY)
-        holder.tvName.setTypeface(null, if (isSelected) Typeface.BOLD else Typeface.NORMAL)
-        holder.itemView.setBackgroundColor(if (isSelected) Color.parseColor("#33FFFFFF") else Color.TRANSPARENT)
-
-        // Click Handling
-        holder.itemView.setOnClickListener {
-            updateSelection(holder.bindingAdapterPosition)
-            onSelect(group)
+        // Efficient Highlighting
+        if (selectedPos == pos) {
+            tv.setBackgroundColor(Color.parseColor("#00BCD4")) // Cyan
+            tv.setTextColor(Color.WHITE)
+        } else {
+            tv.setBackgroundColor(Color.TRANSPARENT)
+            tv.setTextColor(Color.LTGRAY)
         }
         
-        // Focus Handling (for Remote)
-        holder.itemView.setOnFocusChangeListener { _, hasFocus ->
-            if (hasFocus) {
-                updateSelection(holder.bindingAdapterPosition)
-                onSelect(group)
+        // Logic to update selection without resetting focus
+        val performSelect = {
+            if (selectedPos != pos) {
+                val oldPos = selectedPos
+                selectedPos = pos
+                notifyItemChanged(oldPos) // Un-highlight old
+                notifyItemChanged(selectedPos) // Highlight new
+                onSelect(groups[pos]) 
             }
         }
-
-        // Right Key Navigation
-        holder.itemView.setOnKeyListener { _, keyCode, event ->
-            if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
-                onFocusRight()
+        
+        tv.setOnClickListener { performSelect() }
+        tv.setOnFocusChangeListener { _, hasFocus -> if(hasFocus) performSelect() }
+        
+        // Navigation Handler (Calls the callback)
+        tv.setOnKeyListener { _, k, e -> 
+            if(e.action == KeyEvent.ACTION_DOWN && k == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                onFocusRight() 
                 true
-            } else false
+            } else {
+                false
+            }
         }
     }
-
-    private fun updateSelection(pos: Int) {
-        val prev = selectedPos
-        selectedPos = pos
-        notifyItemChanged(prev)
-        notifyItemChanged(selectedPos)
-    }
-
+    
     override fun getItemCount() = groups.size
+    class VH(v: View) : RecyclerView.ViewHolder(v)
 }
 
-// --- CHANNEL ADAPTER (FIXED: No EPG to prevent crashes) ---
+// --- CHANNEL ADAPTER ---
 class ChannelAdapter(
-    private var channels: List<Channel>,
-    private val onPlay: (Channel) -> Unit,
-    private val onFav: (Channel) -> Unit,
-    private val onFocusLeft: () -> Unit // Callback for navigation
+    private var list: List<Channel>, 
+    private val onPlay: (Channel)->Unit, 
+    private val onFav: (Channel)->Unit,
+    private val onFocusLeft: ()->Unit // Callback for navigation
 ) : RecyclerView.Adapter<ChannelAdapter.VH>() {
-
-    private var selectedPos = -1
-
-    fun update(newChannels: List<Channel>, rv: RecyclerView?) {
-        channels = newChannels
-        selectedPos = -1
+    
+    // Updates list and resets scroll to top
+    fun update(n: List<Channel>, rv: RecyclerView?) { 
+        list = n
         notifyDataSetChanged()
         rv?.scrollToPosition(0)
     }
-
-    inner class VH(v: View) : RecyclerView.ViewHolder(v) {
-        val root: LinearLayout = v.findViewById(R.id.btnChannelHeader)
-        val tvNum: TextView = v.findViewById(R.id.tvNum)
-        val tvName: TextView = v.findViewById(R.id.tvName)
-        val imgFav: ImageView = v.findViewById(R.id.imgFav)
-    }
-
-    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
-        val v = LayoutInflater.from(parent.context).inflate(R.layout.item_channel, parent, false)
+    
+    override fun onCreateViewHolder(p: ViewGroup, t: Int): VH {
+        val v = LayoutInflater.from(p.context).inflate(R.layout.item_channel, p, false)
         return VH(v)
     }
+    
+    override fun onBindViewHolder(h: VH, pos: Int) {
+        val c = list[pos]
+        h.num.text = c.number.toString()
+        h.name.text = c.name
+        
+        if (c.isFavorite) h.fav.visibility = View.VISIBLE else h.fav.visibility = View.GONE
+        
+        h.rvProg.layoutManager = LinearLayoutManager(h.itemView.context, LinearLayoutManager.HORIZONTAL, false)
+        h.rvProg.adapter = ProgramAdapter(c.programs)
 
-    override fun onBindViewHolder(holder: VH, position: Int) {
-        val c = channels[position]
-        
-        holder.tvNum.text = c.number.toString()
-        holder.tvName.text = c.name
-        holder.imgFav.visibility = if (c.isFavorite) View.VISIBLE else View.GONE
-        
-        // Highlight logic
-        val isSelected = (selectedPos == position)
-        holder.tvName.setTextColor(if (isSelected) Color.CYAN else Color.WHITE)
-        holder.root.setBackgroundResource(if (isSelected) R.drawable.selector_item else 0)
-        
-        // Auto-focus if selected
-        if (isSelected) holder.root.requestFocus()
+        h.header.setOnClickListener { onPlay(c) }
+        h.header.setOnLongClickListener { onFav(c); true }
 
-        // Play on Click
-        holder.root.setOnClickListener { onPlay(c) }
-        
-        // Favorite on Long Press
-        holder.root.setOnLongClickListener {
-            onFav(c)
-            true
-        }
-
-        // Update selection on focus
-        holder.root.setOnFocusChangeListener { _, hasFocus ->
-            if (hasFocus) {
-                selectedPos = holder.bindingAdapterPosition
+        // Navigation Handler
+        h.header.setOnKeyListener { _, k, e ->
+            if(e.action == KeyEvent.ACTION_DOWN && k == KeyEvent.KEYCODE_DPAD_LEFT) {
+                onFocusLeft()
+                true
+            } else {
+                false
             }
         }
-
-        // Left Key Navigation
-        holder.root.setOnKeyListener { _, keyCode, event ->
-            if (event.action == KeyEvent.ACTION_DOWN) {
-                if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
-                    onFocusLeft()
-                    true
-                } else false
-            } else false
-        }
     }
+    
+    override fun getItemCount() = list.size
+    
+    class VH(v: View) : RecyclerView.ViewHolder(v) {
+        val header: View = v.findViewById(R.id.btnChannelHeader)
+        val num: TextView = v.findViewById(R.id.tvNum)
+        val name: TextView = v.findViewById(R.id.tvName)
+        val fav: ImageView = v.findViewById(R.id.imgFav)
+        val rvProg: RecyclerView = v.findViewById(R.id.rvPrograms)
+    }
+}
 
-    override fun getItemCount() = channels.size
+// --- PROGRAM ADAPTER ---
+class ProgramAdapter(private val l: List<Program>) : RecyclerView.Adapter<ProgramAdapter.VH>() {
+    override fun onCreateViewHolder(p: ViewGroup, t: Int): VH {
+        val v = LayoutInflater.from(p.context).inflate(R.layout.item_program, p, false)
+        return VH(v)
+    }
+    override fun onBindViewHolder(h: VH, i: Int) { 
+        h.t.text = l[i].title
+        h.tm.text = l[i].time 
+    }
+    override fun getItemCount() = l.size
+    class VH(v: View) : RecyclerView.ViewHolder(v) { 
+        val t: TextView = v.findViewById(R.id.tvTitle)
+        val tm: TextView = v.findViewById(R.id.tvTime) 
+    }
 }
