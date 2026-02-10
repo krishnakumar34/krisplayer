@@ -12,7 +12,7 @@ import android.os.Looper
 import android.os.StrictMode
 import android.text.Editable
 import android.text.TextWatcher
-import android.util.Base64 // <--- CRITICAL IMPORT
+import android.util.Base64
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
@@ -24,16 +24,21 @@ import androidx.drawerlayout.widget.DrawerLayout
 import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
-import androidx.media3.common.MediaItem.DrmConfiguration
 import androidx.media3.common.MimeTypes
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.dash.DashMediaSource
+import androidx.media3.exoplayer.drm.DefaultDrmSessionManager
+import androidx.media3.exoplayer.drm.FrameworkMediaDrm
+import androidx.media3.exoplayer.drm.LocalMediaDrmCallback
+import androidx.media3.exoplayer.drm.HttpMediaDrmCallback
 import androidx.media3.exoplayer.hls.DefaultHlsExtractorFactory
 import androidx.media3.exoplayer.hls.HlsMediaSource
-import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.upstream.DefaultAllocator
 import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory
 import androidx.media3.ui.AspectRatioFrameLayout
@@ -53,6 +58,7 @@ import java.net.CookieManager
 import java.net.CookiePolicy
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
+import java.util.UUID
 import java.util.concurrent.TimeUnit
 import javax.net.ssl.*
 
@@ -76,7 +82,7 @@ class MainActivity : AppCompatActivity() {
     private val handler = Handler(Looper.getMainLooper())
     private val PICK_FILE = 101
 
-    // --- SHARED COOKIES (Critical for 301 + 404 Fix) ---
+    // --- SHARED COOKIES ---
     private class BridgeCookieJar : CookieJar {
         private val manager = java.net.CookieManager.getDefault() as java.net.CookieManager
         override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
@@ -96,7 +102,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // --- UNSAFE CLIENT (Ignores SSL, Follows Redirects) ---
     private fun getUnsafeOkHttpClient(): OkHttpClient {
         val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
             override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
@@ -105,7 +110,6 @@ class MainActivity : AppCompatActivity() {
         })
         val sslContext = SSLContext.getInstance("SSL")
         sslContext.init(null, trustAllCerts, SecureRandom())
-        
         return OkHttpClient.Builder()
             .sslSocketFactory(sslContext.socketFactory, trustAllCerts[0] as X509TrustManager)
             .hostnameVerifier { _, _ -> true }
@@ -116,7 +120,6 @@ class MainActivity : AppCompatActivity() {
             .readTimeout(30, TimeUnit.SECONDS)
             .build()
     }
-
     private val resolverClient by lazy { getUnsafeOkHttpClient() }
 
 
@@ -124,7 +127,6 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         StrictMode.setThreadPolicy(StrictMode.ThreadPolicy.Builder().permitAll().build())
-
         val cookieManager = CookieManager()
         cookieManager.setCookiePolicy(CookiePolicy.ACCEPT_ALL)
         CookieHandler.setDefault(cookieManager)
@@ -164,56 +166,46 @@ class MainActivity : AppCompatActivity() {
         addContentView(tvChannelInfo, params)
     }
 
-    private fun showChannelInfo(c: Channel) {
-        tvChannelInfo?.apply {
-            text = "${c.number}  |  ${c.name}"; visibility = View.VISIBLE
-            handler.removeCallbacksAndMessages("HIDE_INFO")
-            handler.postAtTime({ visibility = View.GONE }, "HIDE_INFO", android.os.SystemClock.uptimeMillis() + 4000)
-        }
-    }
-    
     private fun initializePlayer() {
-        // --- 1. RENDERERS FACTORY (Force Extension Mode) ---
-        val renderersFactory = DefaultRenderersFactory(this)
-            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
-
-        // --- 2. LOAD CONTROL ---
+        val renderersFactory = DefaultRenderersFactory(this).setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
         val loadControl = DefaultLoadControl.Builder()
             .setAllocator(DefaultAllocator(true, C.DEFAULT_BUFFER_SEGMENT_SIZE))
             .setBufferDurationsMs(50000, 50000, 1500, 3000)
             .build()
 
-        // --- 3. BUILD PLAYER ---
         player = ExoPlayer.Builder(this, renderersFactory)
             .setLoadControl(loadControl)
             .build()
-            
+        
+        player?.addListener(object : Player.Listener {
+            override fun onPlayerError(error: PlaybackException) {
+                Toast.makeText(this@MainActivity, "Player Error: ${error.message}", Toast.LENGTH_LONG).show()
+                error.printStackTrace()
+            }
+        })
+
         val playerView = findViewById<PlayerView>(R.id.playerView)
         playerView?.player = player
         playerView?.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL
     }
-    
+
     private suspend fun resolveUrl(url: String): Pair<String, String?> {
         return withContext(Dispatchers.IO) {
-           if (url.contains(".m3u8?token=") || url.contains("?t=")) {
-                 return@withContext Pair(url, null)
-            }
             try {
-                val req = Request.Builder().url(url).head().header("User-Agent", "TiviMate/4.7.0").build()
+                // REMOVED SPOOFED HEADER HERE
+                val req = Request.Builder().url(url).head().build()
                 var resp = resolverClient.newCall(req).execute()
-                
                 if (!resp.isSuccessful || resp.code == 405) {
                     resp.close()
-                    val getReq = Request.Builder().url(url).get().header("User-Agent", "TiviMate/4.7.0").build()
+                    // REMOVED SPOOFED HEADER HERE
+                    val getReq = Request.Builder().url(url).get().build()
                     resp = resolverClient.newCall(getReq).execute()
                 }
-
                 val finalUrl = resp.request.url.toString()
                 val contentType = resp.header("Content-Type", "")?.lowercase() ?: ""
                 resp.close()
                 
                 val mime = when {
-                     // FIX: Detect DASH (.mpd)
                      finalUrl.contains(".mpd") || contentType.contains("dash+xml") -> MimeTypes.APPLICATION_MPD
                      finalUrl.contains(".m3u8") || contentType.contains("mpegurl") -> MimeTypes.APPLICATION_M3U8
                      finalUrl.contains(".ts") ||  finalUrl.matches(Regex(".*\\/[0-9]+(\\?.*)?$")) || contentType.contains("mp2t") -> MimeTypes.VIDEO_MP2T
@@ -237,65 +229,72 @@ class MainActivity : AppCompatActivity() {
                 val mimeType = if (detectedMime != null) detectedMime 
                                else if (finalUrl.matches(Regex(".*\\/[0-9]+(\\?.*)?$"))) MimeTypes.VIDEO_MP2T 
                                else MimeTypes.APPLICATION_M3U8
+                
+                // REMOVED USER AGENT VARIABLES & HEADER MAPS
+                // Just use the default OkHttpFactory without setting User-Agent manually
+                val okHttpFactory = OkHttpDataSource.Factory(getUnsafeOkHttpClient())
+                val dataSourceFactory = DefaultDataSource.Factory(this@MainActivity, okHttpFactory)
 
-                // --- 1. BUILD MEDIA ITEM ---
-                val builder = MediaItem.Builder()
-                    .setUri(Uri.parse(finalUrl))
-                    .setMimeType(mimeType)
-                    .setLiveConfiguration(MediaItem.LiveConfiguration.Builder().setTargetOffsetMs(15000).setMaxPlaybackSpeed(1.02f).build())
+                if (mimeType == MimeTypes.APPLICATION_MPD) {
+                    // --- DASH SPECIFIC (CUSTOM DRM MANAGER) ---
+                    var drmSessionManager: DefaultDrmSessionManager? = null
 
-                // --- 2. DRM LOGIC (UPDATED FOR VASANTHAM) ---
-                if (c.drmLicense != null) {
-                    // DETECT CLEARKEY (Format: "kid:key")
-                    // Example: fb3e...:6432...
-                    if (c.drmLicense.contains(":") && !c.drmLicense.startsWith("http") && c.drmLicense.length > 20) {
-                        try {
-                            val parts = c.drmLicense.split(":")
-                            if (parts.size == 2) {
-                                val kidHex = parts[0]
-                                val keyHex = parts[1]
-                                
-                                // 1. Convert Hex to Base64-URL (No Padding)
-                                val kidB64 = base64UrlEncode(hexStringToByteArray(kidHex))
-                                val keyB64 = base64UrlEncode(hexStringToByteArray(keyHex))
-                                
-                                // 2. Create the JSON License
-                                val drmJson = """{"keys":[{"kty":"oct","k":"$keyB64","kid":"$kidB64"}],"type":"temporary"}"""
-                                
-                                // 3. Encode the JSON itself to Base64 to create a Data URI
-                                val drmJsonB64 = Base64.encodeToString(drmJson.toByteArray(), Base64.NO_WRAP)
-                                val licenseUri = "data:application/json;base64,$drmJsonB64"
-                                
-                                builder.setDrmConfiguration(
-                                    MediaItem.DrmConfiguration.Builder(C.CLEARKEY_UUID)
-                                        .setLicenseUri(licenseUri) 
-                                        .build()
-                                )
-                            }
-                        } catch (e: Exception) { e.printStackTrace() }
-                    } else {
-                        // STANDARD WIDEVINE
-                        val userAgent = "TiviMate/4.7.0"
-                        builder.setDrmConfiguration(
-                            MediaItem.DrmConfiguration.Builder(C.WIDEVINE_UUID)
-                                .setLicenseUri(c.drmLicense)
-                                .setLicenseRequestHeaders(mapOf("User-Agent" to userAgent))
-                                .build()
-                        )
+                    if (c.drmLicense != null) {
+                        // 1. CLEARKEY DETECTION (kid:key)
+                        if (c.drmLicense.contains(":") && !c.drmLicense.startsWith("http") && c.drmLicense.length > 20) {
+                            try {
+                                val parts = c.drmLicense.split(":")
+                                if (parts.size == 2) {
+                                    val kidHex = parts[0]
+                                    val keyHex = parts[1]
+                                    val kidB64 = base64UrlEncode(hexStringToByteArray(kidHex))
+                                    val keyB64 = base64UrlEncode(hexStringToByteArray(keyHex))
+                                    
+                                    val drmJson = """{"keys":[{"kty":"oct","k":"$keyB64","kid":"$kidB64"}],"type":"temporary"}"""
+                                    
+                                    val drmCallback = LocalMediaDrmCallback(drmJson.toByteArray())
+                                    drmSessionManager = DefaultDrmSessionManager.Builder()
+                                        .setUuidAndExoMediaDrmProvider(C.CLEARKEY_UUID, FrameworkMediaDrm.DEFAULT_PROVIDER)
+                                        .setMultiSession(false)
+                                        .build(drmCallback)
+                                }
+                            } catch (e: Exception) { e.printStackTrace() }
+                        } 
+                        // 2. WIDEVINE
+                        else {
+                            val mediaDrmCallback = HttpMediaDrmCallback(c.drmLicense, okHttpFactory)
+                            // REMOVED setKeyRequestProperty("User-Agent", ...)
+                            drmSessionManager = DefaultDrmSessionManager.Builder()
+                                .setUuidAndExoMediaDrmProvider(C.WIDEVINE_UUID, FrameworkMediaDrm.DEFAULT_PROVIDER)
+                                .build(mediaDrmCallback)
+                        }
                     }
-                }
 
-                // --- 3. SOURCE FACTORY ---
-                if (mimeType == MimeTypes.APPLICATION_M3U8) {
-                    val userAgent = "TiviMate/4.7.0"
-                    val headers = mapOf("User-Agent" to userAgent)
-                    val okHttpFactory = OkHttpDataSource.Factory(getUnsafeOkHttpClient()).setUserAgent(userAgent).setDefaultRequestProperties(headers)
-                    val dataSourceFactory = DefaultDataSource.Factory(this@MainActivity, okHttpFactory)
+                    val mediaItem = MediaItem.Builder().setUri(Uri.parse(finalUrl)).setMimeType(MimeTypes.APPLICATION_MPD).build()
+                    val sourceFactory = DashMediaSource.Factory(dataSourceFactory)
+                    if (drmSessionManager != null) {
+                        sourceFactory.setDrmSessionManagerProvider { drmSessionManager }
+                    }
+                    player?.setMediaSource(sourceFactory.createMediaSource(mediaItem))
+
+                } else if (mimeType == MimeTypes.APPLICATION_M3U8) {
+                    // --- HLS SPECIFIC ---
                     val hlsExtractorFactory = DefaultHlsExtractorFactory(DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES, true)
-                    val mediaSource = HlsMediaSource.Factory(dataSourceFactory).setExtractorFactory(hlsExtractorFactory).setAllowChunklessPreparation(false).createMediaSource(builder.build())
+                    val builder = MediaItem.Builder().setUri(Uri.parse(finalUrl)).setMimeType(MimeTypes.APPLICATION_M3U8)
+                    
+                    if (c.drmLicense != null && c.drmLicense.startsWith("http")) {
+                        // Removed .setLicenseRequestHeaders(...)
+                        builder.setDrmConfiguration(MediaItem.DrmConfiguration.Builder(C.WIDEVINE_UUID).setLicenseUri(c.drmLicense).build())
+                    }
+                    
+                    val mediaSource = HlsMediaSource.Factory(dataSourceFactory)
+                        .setExtractorFactory(hlsExtractorFactory)
+                        .setAllowChunklessPreparation(false)
+                        .createMediaSource(builder.build())
                     player?.setMediaSource(mediaSource)
                 } else {
-                    // For DASH/MPD to work, you MUST include 'androidx.media3:media3-exoplayer-dash' in build.gradle
+                    // --- OTHER (TS/MP4) ---
+                    val builder = MediaItem.Builder().setUri(Uri.parse(finalUrl)).setMimeType(mimeType)
                     player?.setMediaItem(builder.build())
                 }
                 
@@ -318,18 +317,14 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this@MainActivity, "Loading...", Toast.LENGTH_SHORT).show()
                 allData = M3uParser.parse(this@MainActivity, p, repo.getFavIds())
                 allChannelsFlat = allData.values.flatten().distinctBy { it.id }
-                
                 (rvChannels?.adapter as? ChannelAdapter)?.update(emptyList(), rvChannels)
-
                 rvGroups?.adapter = GroupAdapter(allData.keys.toList(), { group ->
                     val channels = allData[group] ?: emptyList()
                     (rvChannels?.adapter as? ChannelAdapter)?.update(channels, rvChannels)
                 }, { focusChannelList() })
-                
                 if (allData.isNotEmpty()) {
                     val first = allData.keys.first()
                     rvChannels?.adapter = ChannelAdapter(allData[first] ?: emptyList(), { play(it) }, { toggleFav(it) }, { focusGroupList() })
-                    
                     rvChannels?.setOnKeyListener { _, keyCode, event ->
                         if (event.action == KeyEvent.ACTION_DOWN) {
                             if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) { rvGroups?.requestFocus(); true }
@@ -348,7 +343,6 @@ class MainActivity : AppCompatActivity() {
         root.removeAllViews()
         val title = TextView(this); title.text="SETTINGS"; title.textSize=22f; title.setTextColor(Color.CYAN)
         title.isFocusable = false; root.addView(title)
-        
         fun btn(t: String, tag: String, a: () -> Unit) {
             val b = Button(this); b.text = t; b.tag = tag; b.setTextColor(Color.WHITE)
             b.setBackgroundResource(android.R.drawable.btn_default)
@@ -359,7 +353,6 @@ class MainActivity : AppCompatActivity() {
         btn("Search Channels", "first") { openSearch(); drawerLayout?.closeDrawers() }
         btn("+ Add URL Playlist", "other") { showAddUrlDialog() }
         btn("+ Add Local File", "other") { openFilePicker() }
-        
         val sub = TextView(this); sub.text="PLAYLISTS"; sub.textSize=18f; sub.setTextColor(Color.LTGRAY); sub.setPadding(0,20,0,10)
         sub.isFocusable = false; root.addView(sub)
         repo.getPlaylists().forEach { p -> btn(p.name, "list") { repo.setActivePlaylist(p.id); loadData(p); drawerLayout?.closeDrawers() } }
@@ -490,7 +483,7 @@ class MainActivity : AppCompatActivity() {
         return super.onKeyDown(k, e)
     }
     
-    // --- HELPERS FOR CLEARKEY (Needed for the fix) ---
+    // --- HELPERS FOR CLEARKEY (Base64 URL Safe, No Padding, No Wrap) ---
     private fun hexStringToByteArray(s: String): ByteArray {
         val len = s.length
         val data = ByteArray(len / 2)
@@ -511,4 +504,3 @@ class MainActivity : AppCompatActivity() {
 
     
     
-
