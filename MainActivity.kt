@@ -193,9 +193,9 @@ class MainActivity : AppCompatActivity() {
         // --- MANUAL RESOLVER ---
     private suspend fun resolveUrl(url: String): Pair<String, String?> {
         return withContext(Dispatchers.IO) {
-            if (url.contains(".m3u8?token=") || url.contains("?t=")) {
-                 return@withContext Pair(url, null)
-            }
+           //if (url.contains(".m3u8?token=") || url.contains("?t=")) {
+                 //return@withContext Pair(url, null)
+            ,//}
             try {
                 val req = Request.Builder().url(url).head().header("User-Agent", "TiviMate/4.7.0").build()
                 var resp = resolverClient.newCall(req).execute()
@@ -452,6 +452,7 @@ class MainActivity : AppCompatActivity() {
     
 
     
+
 
 
 
