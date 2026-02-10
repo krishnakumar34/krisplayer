@@ -123,6 +123,7 @@ class MainActivity : AppCompatActivity() {
     private val resolverClient by lazy { getUnsafeOkHttpClient() }
 
 
+
         override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -166,6 +167,15 @@ class MainActivity : AppCompatActivity() {
         addContentView(tvChannelInfo, params)
     }
 
+    // --- RESTORED METHOD ---
+    private fun showChannelInfo(c: Channel) {
+        tvChannelInfo?.apply {
+            text = "${c.number}  |  ${c.name}"; visibility = View.VISIBLE
+            handler.removeCallbacksAndMessages("HIDE_INFO")
+            handler.postAtTime({ visibility = View.GONE }, "HIDE_INFO", android.os.SystemClock.uptimeMillis() + 4000)
+        }
+    }
+
     private fun initializePlayer() {
         val renderersFactory = DefaultRenderersFactory(this).setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
         val loadControl = DefaultLoadControl.Builder()
@@ -192,12 +202,11 @@ class MainActivity : AppCompatActivity() {
     private suspend fun resolveUrl(url: String): Pair<String, String?> {
         return withContext(Dispatchers.IO) {
             try {
-                // REMOVED SPOOFED HEADER HERE
+                // NO SPOOFED HEADER
                 val req = Request.Builder().url(url).head().build()
                 var resp = resolverClient.newCall(req).execute()
                 if (!resp.isSuccessful || resp.code == 405) {
                     resp.close()
-                    // REMOVED SPOOFED HEADER HERE
                     val getReq = Request.Builder().url(url).get().build()
                     resp = resolverClient.newCall(getReq).execute()
                 }
@@ -230,8 +239,7 @@ class MainActivity : AppCompatActivity() {
                                else if (finalUrl.matches(Regex(".*\\/[0-9]+(\\?.*)?$"))) MimeTypes.VIDEO_MP2T 
                                else MimeTypes.APPLICATION_M3U8
                 
-                // REMOVED USER AGENT VARIABLES & HEADER MAPS
-                // Just use the default OkHttpFactory without setting User-Agent manually
+                // NO SPOOFED HEADERS OR USER AGENT
                 val okHttpFactory = OkHttpDataSource.Factory(getUnsafeOkHttpClient())
                 val dataSourceFactory = DefaultDataSource.Factory(this@MainActivity, okHttpFactory)
 
@@ -263,7 +271,7 @@ class MainActivity : AppCompatActivity() {
                         // 2. WIDEVINE
                         else {
                             val mediaDrmCallback = HttpMediaDrmCallback(c.drmLicense, okHttpFactory)
-                            // REMOVED setKeyRequestProperty("User-Agent", ...)
+                            // NO SPOOFED AGENT
                             drmSessionManager = DefaultDrmSessionManager.Builder()
                                 .setUuidAndExoMediaDrmProvider(C.WIDEVINE_UUID, FrameworkMediaDrm.DEFAULT_PROVIDER)
                                 .build(mediaDrmCallback)
@@ -283,7 +291,7 @@ class MainActivity : AppCompatActivity() {
                     val builder = MediaItem.Builder().setUri(Uri.parse(finalUrl)).setMimeType(MimeTypes.APPLICATION_M3U8)
                     
                     if (c.drmLicense != null && c.drmLicense.startsWith("http")) {
-                        // Removed .setLicenseRequestHeaders(...)
+                        // NO SPOOFED AGENT
                         builder.setDrmConfiguration(MediaItem.DrmConfiguration.Builder(C.WIDEVINE_UUID).setLicenseUri(c.drmLicense).build())
                     }
                     
@@ -304,7 +312,6 @@ class MainActivity : AppCompatActivity() {
             } catch (e: Exception) { Toast.makeText(this@MainActivity, "Error: ${e.message}", Toast.LENGTH_SHORT).show() }
         }
     }
-
 
 
         private fun showError(title: String, msg: String) {
@@ -483,7 +490,7 @@ class MainActivity : AppCompatActivity() {
         return super.onKeyDown(k, e)
     }
     
-    // --- HELPERS FOR CLEARKEY (Base64 URL Safe, No Padding, No Wrap) ---
+    // --- HELPERS FOR CLEARKEY ---
     private fun hexStringToByteArray(s: String): ByteArray {
         val len = s.length
         val data = ByteArray(len / 2)
@@ -502,5 +509,4 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() { super.onDestroy(); player?.release() }
 }
 
-    
     
