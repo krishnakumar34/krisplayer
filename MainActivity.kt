@@ -118,7 +118,8 @@ class MainActivity : AppCompatActivity() {
 
     private val resolverClient by lazy { getUnsafeOkHttpClient() }
 
-    override fun onCreate(savedInstanceState: Bundle?) {
+
+        override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         StrictMode.setThreadPolicy(StrictMode.ThreadPolicy.Builder().permitAll().build())
@@ -190,7 +191,8 @@ class MainActivity : AppCompatActivity() {
         playerView?.player = player
         playerView?.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL
     }
-        // --- MANUAL RESOLVER ---
+
+    // --- MANUAL RESOLVER (UPDATED FOR DASH/MPD) ---
     private suspend fun resolveUrl(url: String): Pair<String, String?> {
         return withContext(Dispatchers.IO) {
            if (url.contains(".m3u8?token=") || url.contains("?t=")) {
@@ -211,6 +213,8 @@ class MainActivity : AppCompatActivity() {
                 resp.close()
                 
                 val mime = when {
+                     // FIX: Detect DASH (.mpd)
+                     finalUrl.contains(".mpd") || contentType.contains("dash+xml") -> MimeTypes.APPLICATION_MPD
                      finalUrl.contains(".m3u8") || contentType.contains("mpegurl") -> MimeTypes.APPLICATION_M3U8
                      finalUrl.contains(".ts") ||  finalUrl.matches(Regex(".*\\/[0-9]+(\\?.*)?$")) || contentType.contains("mp2t") -> MimeTypes.VIDEO_MP2T
                      else -> null
@@ -230,15 +234,22 @@ class MainActivity : AppCompatActivity() {
                 showChannelInfo(c)
 
                 val (finalUrl, detectedMime) = resolveUrl(c.url)
-                val mimeType = if (detectedMime != null) detectedMime else if (finalUrl.matches(Regex(".*\\/[0-9]+(\\?.*)?$"))) MimeTypes.VIDEO_MP2T else MimeTypes.APPLICATION_M3U8
+                
+                // Logic updated to prioritize detected MIME, then fallbacks
+                val mimeType = if (detectedMime != null) {
+                    detectedMime 
+                } else if (finalUrl.matches(Regex(".*\\/[0-9]+(\\?.*)?$"))) {
+                    MimeTypes.VIDEO_MP2T
+                } else {
+                    MimeTypes.APPLICATION_M3U8 
+                }
 
                 if (mimeType == MimeTypes.APPLICATION_M3U8) {
+                    // --- HLS SPECIFIC SETUP ---
                     val userAgent = "TiviMate/4.7.0"
                     val headers = mapOf("User-Agent" to userAgent)
                     
                     val okHttpFactory = OkHttpDataSource.Factory(getUnsafeOkHttpClient()).setUserAgent(userAgent).setDefaultRequestProperties(headers)
-                    
-                    // --- FIX IS HERE: Changed 'this' to 'this@MainActivity' ---
                     val dataSourceFactory = DefaultDataSource.Factory(this@MainActivity, okHttpFactory)
 
                     // FIX: Allow NON-IDR Keyframes
@@ -251,9 +262,16 @@ class MainActivity : AppCompatActivity() {
 
                     val mediaSource = HlsMediaSource.Factory(dataSourceFactory).setExtractorFactory(hlsExtractorFactory).setAllowChunklessPreparation(false).createMediaSource(builder.build())
                     player?.setMediaSource(mediaSource)
+                
                 } else {
+                    // --- GENERIC SETUP (HANDLES DASH/MPD IF DEPENDENCY EXISTS) ---
                     val builder = MediaItem.Builder().setUri(Uri.parse(finalUrl)).setMimeType(mimeType)
-                    if (c.drmLicense != null) builder.setDrmConfiguration(DrmConfiguration.Builder(C.WIDEVINE_UUID).setLicenseUri(c.drmLicense).build())
+                    
+                    if (c.drmLicense != null) {
+                        builder.setDrmConfiguration(DrmConfiguration.Builder(C.WIDEVINE_UUID).setLicenseUri(c.drmLicense).build())
+                    }
+                    
+                    // For DASH/MPD, ExoPlayer handles it automatically via setMediaItem if the DASH module is in gradle
                     player?.setMediaItem(builder.build())
                 }
                 
@@ -263,8 +281,10 @@ class MainActivity : AppCompatActivity() {
             } catch (e: Exception) { Toast.makeText(this@MainActivity, "Error: ${e.message}", Toast.LENGTH_SHORT).show() }
         }
     }
-    
-    private fun showError(title: String, msg: String) {
+
+
+
+        private fun showError(title: String, msg: String) {
         AlertDialog.Builder(this).setTitle(title).setMessage(msg).setPositiveButton("Close") { _, _ -> }.show()
     }
 
@@ -450,12 +470,4 @@ class MainActivity : AppCompatActivity() {
 }
 
     
-
     
-
-
-
-
-
-
-
