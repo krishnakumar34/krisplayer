@@ -122,9 +122,7 @@ class MainActivity : AppCompatActivity() {
     }
     private val resolverClient by lazy { getUnsafeOkHttpClient() }
 
-
-
-        override fun onCreate(savedInstanceState: Bundle?) {
+    override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         StrictMode.setThreadPolicy(StrictMode.ThreadPolicy.Builder().permitAll().build())
@@ -167,7 +165,6 @@ class MainActivity : AppCompatActivity() {
         addContentView(tvChannelInfo, params)
     }
 
-    // --- RESTORED METHOD ---
     private fun showChannelInfo(c: Channel) {
         tvChannelInfo?.apply {
             text = "${c.number}  |  ${c.name}"; visibility = View.VISIBLE
@@ -199,10 +196,9 @@ class MainActivity : AppCompatActivity() {
         playerView?.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL
     }
 
-    private suspend fun resolveUrl(url: String): Pair<String, String?> {
+        private suspend fun resolveUrl(url: String): Pair<String, String?> {
         return withContext(Dispatchers.IO) {
             try {
-                // NO SPOOFED HEADER
                 val req = Request.Builder().url(url).head().build()
                 var resp = resolverClient.newCall(req).execute()
                 if (!resp.isSuccessful || resp.code == 405) {
@@ -228,6 +224,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun play(c: Channel) {
+        repo.saveLastPlayed(c.id)
+        
         lifecycleScope.launch {
             try {
                 currentChannel = c
@@ -239,16 +237,13 @@ class MainActivity : AppCompatActivity() {
                                else if (finalUrl.matches(Regex(".*\\/[0-9]+(\\?.*)?$"))) MimeTypes.VIDEO_MP2T 
                                else MimeTypes.APPLICATION_M3U8
                 
-                // NO SPOOFED HEADERS OR USER AGENT
                 val okHttpFactory = OkHttpDataSource.Factory(getUnsafeOkHttpClient())
                 val dataSourceFactory = DefaultDataSource.Factory(this@MainActivity, okHttpFactory)
 
                 if (mimeType == MimeTypes.APPLICATION_MPD) {
-                    // --- DASH SPECIFIC (CUSTOM DRM MANAGER) ---
                     var drmSessionManager: DefaultDrmSessionManager? = null
 
                     if (c.drmLicense != null) {
-                        // 1. CLEARKEY DETECTION (kid:key)
                         if (c.drmLicense.contains(":") && !c.drmLicense.startsWith("http") && c.drmLicense.length > 20) {
                             try {
                                 val parts = c.drmLicense.split(":")
@@ -257,9 +252,7 @@ class MainActivity : AppCompatActivity() {
                                     val keyHex = parts[1]
                                     val kidB64 = base64UrlEncode(hexStringToByteArray(kidHex))
                                     val keyB64 = base64UrlEncode(hexStringToByteArray(keyHex))
-                                    
                                     val drmJson = """{"keys":[{"kty":"oct","k":"$keyB64","kid":"$kidB64"}],"type":"temporary"}"""
-                                    
                                     val drmCallback = LocalMediaDrmCallback(drmJson.toByteArray())
                                     drmSessionManager = DefaultDrmSessionManager.Builder()
                                         .setUuidAndExoMediaDrmProvider(C.CLEARKEY_UUID, FrameworkMediaDrm.DEFAULT_PROVIDER)
@@ -268,10 +261,8 @@ class MainActivity : AppCompatActivity() {
                                 }
                             } catch (e: Exception) { e.printStackTrace() }
                         } 
-                        // 2. WIDEVINE
                         else {
                             val mediaDrmCallback = HttpMediaDrmCallback(c.drmLicense, okHttpFactory)
-                            // NO SPOOFED AGENT
                             drmSessionManager = DefaultDrmSessionManager.Builder()
                                 .setUuidAndExoMediaDrmProvider(C.WIDEVINE_UUID, FrameworkMediaDrm.DEFAULT_PROVIDER)
                                 .build(mediaDrmCallback)
@@ -286,35 +277,28 @@ class MainActivity : AppCompatActivity() {
                     player?.setMediaSource(sourceFactory.createMediaSource(mediaItem))
 
                 } else if (mimeType == MimeTypes.APPLICATION_M3U8) {
-                    // --- HLS SPECIFIC ---
                     val hlsExtractorFactory = DefaultHlsExtractorFactory(DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES, true)
                     val builder = MediaItem.Builder().setUri(Uri.parse(finalUrl)).setMimeType(MimeTypes.APPLICATION_M3U8)
-                    
                     if (c.drmLicense != null && c.drmLicense.startsWith("http")) {
-                        // NO SPOOFED AGENT
                         builder.setDrmConfiguration(MediaItem.DrmConfiguration.Builder(C.WIDEVINE_UUID).setLicenseUri(c.drmLicense).build())
                     }
-                    
                     val mediaSource = HlsMediaSource.Factory(dataSourceFactory)
                         .setExtractorFactory(hlsExtractorFactory)
                         .setAllowChunklessPreparation(false)
                         .createMediaSource(builder.build())
                     player?.setMediaSource(mediaSource)
                 } else {
-                    // --- OTHER (TS/MP4) ---
                     val builder = MediaItem.Builder().setUri(Uri.parse(finalUrl)).setMimeType(mimeType)
                     player?.setMediaItem(builder.build())
                 }
                 
                 player?.prepare()
                 player?.play()
-                epgContainer?.visibility = View.GONE
             } catch (e: Exception) { Toast.makeText(this@MainActivity, "Error: ${e.message}", Toast.LENGTH_SHORT).show() }
         }
     }
 
-
-        private fun showError(title: String, msg: String) {
+    private fun showError(title: String, msg: String) {
         AlertDialog.Builder(this).setTitle(title).setMessage(msg).setPositiveButton("Close") { _, _ -> }.show()
     }
 
@@ -324,22 +308,42 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this@MainActivity, "Loading...", Toast.LENGTH_SHORT).show()
                 allData = M3uParser.parse(this@MainActivity, p, repo.getFavIds())
                 allChannelsFlat = allData.values.flatten().distinctBy { it.id }
+                
                 (rvChannels?.adapter as? ChannelAdapter)?.update(emptyList(), rvChannels)
+                
                 rvGroups?.adapter = GroupAdapter(allData.keys.toList(), { group ->
                     val channels = allData[group] ?: emptyList()
                     (rvChannels?.adapter as? ChannelAdapter)?.update(channels, rvChannels)
                 }, { focusChannelList() })
+                
                 if (allData.isNotEmpty()) {
-                    val first = allData.keys.first()
-                    rvChannels?.adapter = ChannelAdapter(allData[first] ?: emptyList(), { play(it) }, { toggleFav(it) }, { focusGroupList() })
+                    val firstGroup = allData.keys.first()
+                    rvChannels?.adapter = ChannelAdapter(allData[firstGroup] ?: emptyList(), 
+                        { 
+                            play(it)
+                            epgContainer?.visibility = View.GONE 
+                        }, 
+                        { toggleFav(it) }, 
+                        { focusGroupList() }
+                    )
+                    
                     rvChannels?.setOnKeyListener { _, keyCode, event ->
                         if (event.action == KeyEvent.ACTION_DOWN) {
                             if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) { rvGroups?.requestFocus(); true }
                             else if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) true else false
                         } else false
                     }
-                    epgContainer?.visibility = View.VISIBLE
-                    rvGroups?.requestFocus()
+
+                    val lastId = repo.getLastPlayed()
+                    val lastChannel = if (lastId != null) allChannelsFlat.find { it.id == lastId } else null
+                    
+                    if (lastChannel != null) {
+                        play(lastChannel)
+                        epgContainer?.visibility = View.GONE
+                    } else {
+                        epgContainer?.visibility = View.VISIBLE
+                        rvGroups?.requestFocus()
+                    }
                 } else { Toast.makeText(this@MainActivity, "No channels!", Toast.LENGTH_LONG).show() }
             } catch (e: Exception) { showError("Playlist Error", e.message ?: "Unknown") }
         }
@@ -394,7 +398,8 @@ class MainActivity : AppCompatActivity() {
         AlertDialog.Builder(this).setTitle("Welcome").setMessage("Add Playlist").setPositiveButton("URL") { _,_ -> showAddUrlDialog() }.setNegativeButton("File") { _,_ -> openFilePicker() }.show()
     }
 
-    private fun setupSearchUI() {
+
+        private fun setupSearchUI() {
         searchContainer = findViewById(R.id.searchContainer)
         etSearch = findViewById(R.id.etSearch)
         rvSearchResults = findViewById(R.id.rvSearchResults)
@@ -418,7 +423,11 @@ class MainActivity : AppCompatActivity() {
         if (query.isEmpty()) { rvSearchResults?.adapter = null; tvSearchCount?.text = "0 Results"; return }
         val results = allChannelsFlat.filter { it.name.contains(query, ignoreCase = true) }
         tvSearchCount?.text = "${results.size} Results"
-        rvSearchResults?.adapter = ChannelAdapter(results, { c -> play(c); closeSearch() }, { c -> toggleFav(c) }, {})
+        rvSearchResults?.adapter = ChannelAdapter(results, { c -> 
+            play(c)
+            closeSearch()
+            epgContainer?.visibility = View.GONE 
+        }, { c -> toggleFav(c) }, {})
     }
 
     private fun openSearch() { searchContainer?.visibility = View.VISIBLE; epgContainer?.visibility = View.GONE; etSearch?.requestFocus(); showKeyboard() }
@@ -430,6 +439,35 @@ class MainActivity : AppCompatActivity() {
     fun focusGroupList() { rvGroups?.requestFocus() }
     fun focusChannelList() { rvChannels?.requestFocus() }
 
+    private fun syncEpgWithCurrentChannel() {
+        epgContainer?.visibility = View.VISIBLE
+        val curr = currentChannel ?: return
+        
+        val targetGroup = if (allData.containsKey("All Channels")) "All Channels" else curr.group
+        val groupIndex = allData.keys.indexOf(targetGroup)
+        
+        if (groupIndex != -1) {
+            (rvGroups?.adapter as? GroupAdapter)?.select(groupIndex)
+            rvGroups?.scrollToPosition(groupIndex)
+            
+            val adapter = rvChannels?.adapter as? ChannelAdapter
+            val channels = adapter?.getItems() ?: emptyList()
+            val channelIndex = channels.indexOfFirst { it.id == curr.id }
+            
+            if (channelIndex != -1) {
+                (rvChannels?.layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(channelIndex, 100)
+                rvChannels?.post {
+                    val vh = rvChannels?.findViewHolderForAdapterPosition(channelIndex)
+                    vh?.itemView?.requestFocus()
+                }
+            } else {
+                rvGroups?.requestFocus()
+            }
+        } else {
+            rvGroups?.requestFocus()
+        }
+    }
+
     override fun onKeyDown(k: Int, e: KeyEvent?): Boolean {
         if (drawerLayout?.isDrawerOpen(Gravity.END) == true) {
             if (k == KeyEvent.KEYCODE_BACK) { drawerLayout?.closeDrawers(); return true }
@@ -439,6 +477,24 @@ class MainActivity : AppCompatActivity() {
             if (k == KeyEvent.KEYCODE_BACK) { closeSearch(); return true }
             return super.onKeyDown(k, e)
         }
+        
+        if (k == KeyEvent.KEYCODE_BACK) {
+            if (epgContainer?.visibility == View.VISIBLE) {
+                finish() 
+                return true
+            } else {
+                syncEpgWithCurrentChannel()
+                return true
+            }
+        }
+        
+        if (k == KeyEvent.KEYCODE_DPAD_CENTER || k == KeyEvent.KEYCODE_ENTER || k == KeyEvent.KEYCODE_MENU) {
+            if (epgContainer?.visibility != View.VISIBLE) {
+                syncEpgWithCurrentChannel()
+                return true
+            }
+        }
+
         if (k in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9) {
             numBuffer += (k - KeyEvent.KEYCODE_0)
             findViewById<TextView>(R.id.tvOverlayNum)?.let { tv ->
@@ -475,22 +531,12 @@ class MainActivity : AppCompatActivity() {
                     root?.postDelayed({ root.findViewWithTag<View>("first")?.requestFocus() }, 100)
                     return true 
                 }
-                KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_MENU -> {
-                    epgContainer?.visibility = View.VISIBLE
-                    rvGroups?.requestFocus()
-                    return true
-                }
             }
         } 
         
-        if (k == KeyEvent.KEYCODE_BACK) {
-            if (epgContainer?.visibility == View.VISIBLE) { epgContainer?.visibility = View.GONE; return true }
-        }
-
         return super.onKeyDown(k, e)
     }
     
-    // --- HELPERS FOR CLEARKEY ---
     private fun hexStringToByteArray(s: String): ByteArray {
         val len = s.length
         val data = ByteArray(len / 2)
