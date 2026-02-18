@@ -10,15 +10,26 @@ import android.widget.TextView
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 
-// --- GROUP ADAPTER (Fixed Navigation Logic) ---
+// --- GROUP ADAPTER (Updated for Programmatic Selection) ---
 class GroupAdapter(
     private val groups: List<String>, 
     private val onSelect: (String)->Unit,
-    private val onFocusRight: ()->Unit // Callback for navigation
+    private val onFocusRight: ()->Unit 
 ) : RecyclerView.Adapter<GroupAdapter.VH>() {
     
     var selectedPos = 0
     
+    // NEW: Allow selecting a group programmatically
+    fun select(index: Int) {
+        if (index in groups.indices && index != selectedPos) {
+            val old = selectedPos
+            selectedPos = index
+            notifyItemChanged(old)
+            notifyItemChanged(selectedPos)
+            onSelect(groups[selectedPos])
+        }
+    }
+
     override fun onCreateViewHolder(p: ViewGroup, t: Int): VH {
         val tv = TextView(p.context)
         tv.setTextColor(Color.LTGRAY)
@@ -35,22 +46,20 @@ class GroupAdapter(
         val tv = h.itemView as TextView
         tv.text = groups[pos]
         
-        // Efficient Highlighting
         if (selectedPos == pos) {
-            tv.setBackgroundColor(Color.parseColor("#00BCD4")) // Cyan
+            tv.setBackgroundColor(Color.parseColor("#00BCD4")) 
             tv.setTextColor(Color.WHITE)
         } else {
             tv.setBackgroundColor(Color.TRANSPARENT)
             tv.setTextColor(Color.LTGRAY)
         }
         
-        // Logic to update selection without resetting focus
         val performSelect = {
             if (selectedPos != pos) {
                 val oldPos = selectedPos
                 selectedPos = pos
-                notifyItemChanged(oldPos) // Un-highlight old
-                notifyItemChanged(selectedPos) // Highlight new
+                notifyItemChanged(oldPos) 
+                notifyItemChanged(selectedPos) 
                 onSelect(groups[pos]) 
             }
         }
@@ -58,7 +67,6 @@ class GroupAdapter(
         tv.setOnClickListener { performSelect() }
         tv.setOnFocusChangeListener { _, hasFocus -> if(hasFocus) performSelect() }
         
-        // Navigation Handler (Calls the callback)
         tv.setOnKeyListener { _, k, e -> 
             if(e.action == KeyEvent.ACTION_DOWN && k == KeyEvent.KEYCODE_DPAD_RIGHT) {
                 onFocusRight() 
@@ -78,15 +86,17 @@ class ChannelAdapter(
     private var list: List<Channel>, 
     private val onPlay: (Channel)->Unit, 
     private val onFav: (Channel)->Unit,
-    private val onFocusLeft: ()->Unit // Callback for navigation
+    private val onFocusLeft: ()->Unit 
 ) : RecyclerView.Adapter<ChannelAdapter.VH>() {
     
-    // Updates list and resets scroll to top
     fun update(n: List<Channel>, rv: RecyclerView?) { 
         list = n
         notifyDataSetChanged()
         rv?.scrollToPosition(0)
     }
+
+    // NEW: Get current list for finding index
+    fun getItems(): List<Channel> = list
     
     override fun onCreateViewHolder(p: ViewGroup, t: Int): VH {
         val v = LayoutInflater.from(p.context).inflate(R.layout.item_channel, p, false)
@@ -106,7 +116,6 @@ class ChannelAdapter(
         h.header.setOnClickListener { onPlay(c) }
         h.header.setOnLongClickListener { onFav(c); true }
 
-        // Navigation Handler
         h.header.setOnKeyListener { _, k, e ->
             if(e.action == KeyEvent.ACTION_DOWN && k == KeyEvent.KEYCODE_DPAD_LEFT) {
                 onFocusLeft()
