@@ -56,4 +56,13 @@ class Repository(context: Context) {
         val json = prefs.getString("recents", "[]")
         return gson.fromJson(json, object : TypeToken<List<Channel>>() {}.type)
     }
+
+    // --- NEW: LAST PLAYED FEATURE ---
+    fun saveLastPlayed(channelId: String) {
+        prefs.edit().putString("last_played_id", channelId).apply()
+    }
+
+    fun getLastPlayed(): String? {
+        return prefs.getString("last_played_id", null)
+    }
 }
