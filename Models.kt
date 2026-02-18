@@ -21,7 +21,7 @@ data class Channel(
     val logo: String? = null,
     val drmLicense: String? = null,
     var isFavorite: Boolean = false,
-    val programs: List<Program> = generateDummyPrograms()
+    val programs: List<Program> = emptyList() // Changed: Removed sample guide generation
 )
 
 data class Program(val title: String, val time: String)
