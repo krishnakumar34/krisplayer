@@ -122,9 +122,13 @@ jobs:
         task clean(type: Delete) { delete rootProject.buildDir }
         EOF
 
-        # 6. App build.gradle (UPDATED WITH SIGNING CONFIG)
+        # 6. App build.gradle (UPDATED WITH SIGNING CONFIG AND ABI SPLITS)
         cat <<EOF > app/build.gradle
         plugins { id 'com.android.application'; id 'org.jetbrains.kotlin.android' }
+        
+        // Define distinct prefixes for Version Codes required for Split APKs
+        ext.abiCodes = ['armeabi-v7a': 1, 'arm64-v8a': 2, 'x86': 3, 'x86_64': 4]
+
         android {
             namespace 'com.iptv.player'
             compileSdk 34
@@ -146,6 +150,27 @@ jobs:
                     signingConfig signingConfigs.release
                     minifyEnabled false
                     proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+                }
+            }
+
+            // --- SPLIT APK CONFIGURATION ---
+            splits {
+                abi {
+                    enable true
+                    reset()
+                    include 'armeabi-v7a', 'arm64-v8a', 'x86'
+                    universalApk true // Also generates one universal APK just in case
+                }
+            }
+
+            // --- VERSION CODE GENERATOR ---
+            applicationVariants.all { variant ->
+                variant.outputs.each { output ->
+                    def abiFilter = output.getFilter(com.android.build.OutputFile.ABI)
+                    if (abiFilter != null) {
+                        def abiMultiplier = project.ext.abiCodes.get(abiFilter)
+                        output.versionCodeOverride = abiMultiplier * 1000 + variant.versionCode
+                    }
                 }
             }
 
@@ -265,6 +290,11 @@ jobs:
         # ---------------------------------------------------------
         gradle assembleRelease
 
+    # ---------------------------------------------------------
+    # STEP 6: UPLOAD ALL SPLIT APKs
+    # ---------------------------------------------------------
     - uses: actions/upload-artifact@v4
-      with: { name: TiviClone-Pro-Release, path: app/build/outputs/apk/release/app-release.apk }
-      
+      with: 
+        name: TiviClone-Pro-Split-APKs
+        path: app/build/outputs/apk/release/*.apk
+        
