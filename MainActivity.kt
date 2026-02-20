@@ -278,7 +278,17 @@ class MainActivity : AppCompatActivity() {
 
                 } else if (mimeType == MimeTypes.APPLICATION_M3U8) {
                     val hlsExtractorFactory = DefaultHlsExtractorFactory(DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES, true)
-                    val builder = MediaItem.Builder().setUri(Uri.parse(finalUrl)).setMimeType(MimeTypes.APPLICATION_M3U8)
+                    
+                    val builder = MediaItem.Builder()
+                        .setUri(Uri.parse(finalUrl))
+                        .setMimeType(MimeTypes.APPLICATION_M3U8)
+                        .setLiveConfiguration(
+                            MediaItem.LiveConfiguration.Builder()
+                                .setTargetOffsetMs(15000)
+                                .setMaxPlaybackSpeed(1.02f)
+                                .build()
+                        )
+                        
                     if (c.drmLicense != null && c.drmLicense.startsWith("http")) {
                         builder.setDrmConfiguration(MediaItem.DrmConfiguration.Builder(C.WIDEVINE_UUID).setLicenseUri(c.drmLicense).build())
                     }
@@ -349,7 +359,8 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun updateSettingsDrawer() {
+
+        private fun updateSettingsDrawer() {
         val root = findViewById<LinearLayout>(R.id.settingsDrawer) ?: return
         root.removeAllViews()
         val title = TextView(this); title.text="SETTINGS"; title.textSize=22f; title.setTextColor(Color.CYAN)
@@ -398,8 +409,7 @@ class MainActivity : AppCompatActivity() {
         AlertDialog.Builder(this).setTitle("Welcome").setMessage("Add Playlist").setPositiveButton("URL") { _,_ -> showAddUrlDialog() }.setNegativeButton("File") { _,_ -> openFilePicker() }.show()
     }
 
-
-        private fun setupSearchUI() {
+    private fun setupSearchUI() {
         searchContainer = findViewById(R.id.searchContainer)
         etSearch = findViewById(R.id.etSearch)
         rvSearchResults = findViewById(R.id.rvSearchResults)
@@ -557,8 +567,6 @@ class MainActivity : AppCompatActivity() {
     
     override fun onDestroy() { super.onDestroy(); player?.release() }
 }
-
-
 
     
     
