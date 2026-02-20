@@ -7,10 +7,9 @@ import android.view.ViewGroup
 import android.view.KeyEvent
 import android.widget.ImageView
 import android.widget.TextView
-import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 
-// --- GROUP ADAPTER (Updated for Programmatic Selection) ---
+// --- GROUP ADAPTER ---
 class GroupAdapter(
     private val groups: List<String>, 
     private val onSelect: (String)->Unit,
@@ -19,7 +18,6 @@ class GroupAdapter(
     
     var selectedPos = 0
     
-    // NEW: Allow selecting a group programmatically
     fun select(index: Int) {
         if (index in groups.indices && index != selectedPos) {
             val old = selectedPos
@@ -66,14 +64,8 @@ class GroupAdapter(
         
         tv.setOnClickListener { performSelect() }
         tv.setOnFocusChangeListener { _, hasFocus -> if(hasFocus) performSelect() }
-        
         tv.setOnKeyListener { _, k, e -> 
-            if(e.action == KeyEvent.ACTION_DOWN && k == KeyEvent.KEYCODE_DPAD_RIGHT) {
-                onFocusRight() 
-                true
-            } else {
-                false
-            }
+            if(e.action == KeyEvent.ACTION_DOWN && k == KeyEvent.KEYCODE_DPAD_RIGHT) { onFocusRight(); true } else false
         }
     }
     
@@ -95,7 +87,6 @@ class ChannelAdapter(
         rv?.scrollToPosition(0)
     }
 
-    // NEW: Get current list for finding index
     fun getItems(): List<Channel> = list
     
     override fun onCreateViewHolder(p: ViewGroup, t: Int): VH {
@@ -107,49 +98,20 @@ class ChannelAdapter(
         val c = list[pos]
         h.num.text = c.number.toString()
         h.name.text = c.name
+        h.fav.visibility = if (c.isFavorite) View.VISIBLE else View.GONE
         
-        if (c.isFavorite) h.fav.visibility = View.VISIBLE else h.fav.visibility = View.GONE
-        
-        h.rvProg.layoutManager = LinearLayoutManager(h.itemView.context, LinearLayoutManager.HORIZONTAL, false)
-        h.rvProg.adapter = ProgramAdapter(c.programs)
-
-        h.header.setOnClickListener { onPlay(c) }
-        h.header.setOnLongClickListener { onFav(c); true }
-
-        h.header.setOnKeyListener { _, k, e ->
-            if(e.action == KeyEvent.ACTION_DOWN && k == KeyEvent.KEYCODE_DPAD_LEFT) {
-                onFocusLeft()
-                true
-            } else {
-                false
-            }
+        h.itemView.setOnClickListener { onPlay(c) }
+        h.itemView.setOnLongClickListener { onFav(c); true }
+        h.itemView.setOnKeyListener { _, k, e ->
+            if(e.action == KeyEvent.ACTION_DOWN && k == KeyEvent.KEYCODE_DPAD_LEFT) { onFocusLeft(); true } else false
         }
     }
     
     override fun getItemCount() = list.size
     
     class VH(v: View) : RecyclerView.ViewHolder(v) {
-        val header: View = v.findViewById(R.id.btnChannelHeader)
         val num: TextView = v.findViewById(R.id.tvNum)
         val name: TextView = v.findViewById(R.id.tvName)
         val fav: ImageView = v.findViewById(R.id.imgFav)
-        val rvProg: RecyclerView = v.findViewById(R.id.rvPrograms)
-    }
-}
-
-// --- PROGRAM ADAPTER ---
-class ProgramAdapter(private val l: List<Program>) : RecyclerView.Adapter<ProgramAdapter.VH>() {
-    override fun onCreateViewHolder(p: ViewGroup, t: Int): VH {
-        val v = LayoutInflater.from(p.context).inflate(R.layout.item_program, p, false)
-        return VH(v)
-    }
-    override fun onBindViewHolder(h: VH, i: Int) { 
-        h.t.text = l[i].title
-        h.tm.text = l[i].time 
-    }
-    override fun getItemCount() = l.size
-    class VH(v: View) : RecyclerView.ViewHolder(v) { 
-        val t: TextView = v.findViewById(R.id.tvTitle)
-        val tm: TextView = v.findViewById(R.id.tvTime) 
     }
 }
