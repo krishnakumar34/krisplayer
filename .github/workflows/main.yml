@@ -1,6 +1,5 @@
 name: Build TiviMate Pro Release (Branch Rel)
 
-# 1. CHANGED BRANCH TO 'rel'
 on: 
   push:
     branches: [ "rel" ]
@@ -12,11 +11,9 @@ jobs:
     steps:
     - uses: actions/checkout@v3
     
-    # 1. SETUP JAVA
     - uses: actions/setup-java@v3
       with: { java-version: '17', distribution: 'temurin' }
 
-    # 2. FORCE GRADLE 8.2
     - name: Setup Gradle
       uses: gradle/actions/setup-gradle@v3
       with:
@@ -24,44 +21,23 @@ jobs:
 
     - name: Build Release APK
       run: |
-        # ---------------------------------------------------------
-        # STEP 1: CLEAN & INITIALIZE
-        # ---------------------------------------------------------
         rm -f build.gradle settings.gradle gradle.properties
         
-        # ---------------------------------------------------------
-        # STEP 2: FILE SETUP
-        # ---------------------------------------------------------
         mkdir -p app/src/main/java/com/iptv/player
         mkdir -p app/src/main/res/{layout,values,drawable,xml}
-        # Move any existing Kotlin files
         mv *.kt app/src/main/java/com/iptv/player/ || true
 
-        # ---------------------------------------------------------
-        # STEP 3: GENERATE KEYSTORE (Temporary Key)
-        # ---------------------------------------------------------
-        # Generates a keystore named release.keystore in the app directory
-        # Alias: key0, Password: android
         keytool -genkeypair -v -keystore app/release.keystore -keyalg RSA -keysize 2048 -validity 10000 -alias key0 -dname "CN=TiviClone, OU=Dev, O=TiviClone, L=Internet, S=World, C=US" -storepass android -keypass android
 
-        # ---------------------------------------------------------
-        # STEP 4: GENERATE CONFIGURATION
-        # ---------------------------------------------------------
-        
-        # 1. Network Security Config
         cat <<EOF > app/src/main/res/xml/network_security_config.xml
         <?xml version="1.0" encoding="utf-8"?>
         <network-security-config>
             <base-config cleartextTrafficPermitted="true">
-                <trust-anchors>
-                    <certificates src="system" />
-                    <certificates src="user" />
-                </trust-anchors>
+                <trust-anchors><certificates src="system" /><certificates src="user" /></trust-anchors>
             </base-config>
         </network-security-config>
         EOF
 
-        # 2. Android Manifest
         cat <<EOF > app/src/main/AndroidManifest.xml
         <?xml version="1.0" encoding="utf-8"?>
         <manifest xmlns:android="http://schemas.android.com/apk/res/android">
@@ -86,47 +62,32 @@ jobs:
         </manifest>
         EOF
 
-        # 3. Gradle Properties
         cat <<EOF > gradle.properties
         android.useAndroidX=true
         android.enableJetifier=true
         org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
         EOF
 
-        # 4. Settings.gradle
         cat <<EOF > settings.gradle
-        pluginManagement {
-            repositories {
-                google()
-                mavenCentral()
-                gradlePluginPortal()
-            }
-        }
+        pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
         rootProject.name = "TiviClonePro"
         include ':app'
         EOF
 
-        # 5. Root build.gradle
         cat <<EOF > build.gradle
         buildscript {
             repositories { google(); mavenCentral() }
             dependencies { classpath 'com.android.tools.build:gradle:8.2.0'; classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.0' }
         }
         allprojects {
-            repositories {
-                google()
-                mavenCentral()
-                maven { url 'https://maven.jellyfin.org/release' } 
-            }
+            repositories { google(); mavenCentral(); maven { url 'https://maven.jellyfin.org/release' } }
         }
         task clean(type: Delete) { delete rootProject.buildDir }
         EOF
 
-        # 6. App build.gradle (UPDATED WITH SIGNING CONFIG AND ABI SPLITS)
         cat <<EOF > app/build.gradle
         plugins { id 'com.android.application'; id 'org.jetbrains.kotlin.android' }
         
-        // Define distinct prefixes for Version Codes required for Split APKs
         ext.abiCodes = ['armeabi-v7a': 1, 'arm64-v8a': 2, 'x86': 3, 'x86_64': 4]
 
         android {
@@ -135,35 +96,18 @@ jobs:
             defaultConfig { applicationId 'com.iptv.player'; minSdk 21; targetSdk 34; versionCode 1; versionName '1.0' }
             buildFeatures { viewBinding true }
             
-            // --- SIGNING CONFIGURATION ---
             signingConfigs {
-                release {
-                    storeFile file("release.keystore")
-                    storePassword "android"
-                    keyAlias "key0"
-                    keyPassword "android"
-                }
+                release { storeFile file("release.keystore"); storePassword "android"; keyAlias "key0"; keyPassword "android" }
             }
 
             buildTypes {
-                release {
-                    signingConfig signingConfigs.release
-                    minifyEnabled false
-                    proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-                }
+                release { signingConfig signingConfigs.release; minifyEnabled false; proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro' }
             }
 
-            // --- SPLIT APK CONFIGURATION ---
             splits {
-                abi {
-                    enable true
-                    reset()
-                    include 'armeabi-v7a', 'arm64-v8a', 'x86'
-                    universalApk true // Also generates one universal APK just in case
-                }
+                abi { enable true; reset(); include 'armeabi-v7a', 'arm64-v8a', 'x86'; universalApk true }
             }
 
-            // --- VERSION CODE GENERATOR ---
             applicationVariants.all { variant ->
                 variant.outputs.each { output ->
                     def abiFilter = output.getFilter(com.android.build.OutputFile.ABI)
@@ -174,15 +118,9 @@ jobs:
                 }
             }
 
-            compileOptions { 
-                coreLibraryDesugaringEnabled true 
-                sourceCompatibility JavaVersion.VERSION_1_8
-                targetCompatibility JavaVersion.VERSION_1_8 
-            }
+            compileOptions { coreLibraryDesugaringEnabled true; sourceCompatibility JavaVersion.VERSION_1_8; targetCompatibility JavaVersion.VERSION_1_8 }
             kotlinOptions { jvmTarget = '1.8' }
-            packagingOptions {
-                jniLibs { useLegacyPackaging true }
-            }
+            packagingOptions { jniLibs { useLegacyPackaging true } }
         }
         dependencies {
             coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.0.4'
@@ -203,7 +141,6 @@ jobs:
         }
         EOF
 
-        # 7. Colors
         cat <<EOF > app/src/main/res/values/colors.xml
         <?xml version="1.0" encoding="utf-8"?>
         <resources>
@@ -217,7 +154,6 @@ jobs:
         </resources>
         EOF
 
-        # 8. Selector
         mkdir -p app/src/main/res/drawable
         cat <<EOF > app/src/main/res/drawable/selector_item.xml
         <?xml version="1.0" encoding="utf-8"?>
@@ -227,7 +163,6 @@ jobs:
         </selector>
         EOF
 
-        # 9. Main Layout
         cat <<EOF > app/src/main/res/layout/activity_main.xml
         <?xml version="1.0" encoding="utf-8"?>
         <androidx.drawerlayout.widget.DrawerLayout xmlns:android="http://schemas.android.com/apk/res/android"
@@ -263,36 +198,28 @@ jobs:
         </androidx.drawerlayout.widget.DrawerLayout>
         EOF
 
-        # 10. Channel Layout
+        # 10. Channel Layout (FLATTENED for Firestick)
         cat <<EOF > app/src/main/res/layout/item_channel.xml
         <?xml version="1.0" encoding="utf-8"?>
-        <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="60dp" android:orientation="horizontal" android:paddingBottom="2dp" android:baselineAligned="false">
-            <LinearLayout android:id="@+id/btnChannelHeader" android:layout_width="220dp" android:layout_height="match_parent" android:background="@drawable/selector_item" android:gravity="center_vertical" android:padding="8dp" android:focusable="true" android:clickable="true">
-                <ImageView android:id="@+id/imgFav" android:layout_width="16dp" android:layout_height="16dp" android:visibility="gone" android:src="@android:drawable/star_on" android:tint="@color/highlight"/>
-                <TextView android:id="@+id/tvNum" android:layout_width="30dp" android:layout_height="wrap_content" android:textColor="@color/highlight" android:textStyle="bold"/>
-                <TextView android:id="@+id/tvName" android:layout_width="match_parent" android:layout_height="wrap_content" android:textColor="@color/text_primary" android:maxLines="1" android:ellipsize="end" android:textSize="14sp"/>
-            </LinearLayout>
-            <androidx.recyclerview.widget.RecyclerView android:id="@+id/rvPrograms" android:layout_width="match_parent" android:layout_height="match_parent" android:paddingStart="4dp" android:focusable="false"/>
+        <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" 
+            android:layout_width="match_parent" 
+            android:layout_height="60dp" 
+            android:background="@drawable/selector_item" 
+            android:gravity="center_vertical" 
+            android:padding="8dp" 
+            android:focusable="true" 
+            android:clickable="true"
+            android:orientation="horizontal"
+            android:layout_marginBottom="2dp">
+            
+            <ImageView android:id="@+id/imgFav" android:layout_width="16dp" android:layout_height="16dp" android:visibility="gone" android:src="@android:drawable/star_on" android:tint="@color/highlight"/>
+            <TextView android:id="@+id/tvNum" android:layout_width="35dp" android:layout_height="wrap_content" android:textColor="@color/highlight" android:textStyle="bold" android:layout_marginStart="4dp"/>
+            <TextView android:id="@+id/tvName" android:layout_width="match_parent" android:layout_height="wrap_content" android:textColor="@color/text_primary" android:maxLines="1" android:ellipsize="end" android:textSize="14sp" android:layout_marginStart="8dp"/>
         </LinearLayout>
         EOF
 
-        # 11. Program Layout
-        cat <<EOF > app/src/main/res/layout/item_program.xml
-        <?xml version="1.0" encoding="utf-8"?>
-        <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="200dp" android:layout_height="match_parent" android:orientation="vertical" android:background="@drawable/selector_item" android:padding="6dp" android:layout_marginEnd="2dp" android:focusable="true" android:clickable="true">
-            <TextView android:id="@+id/tvTitle" android:layout_width="match_parent" android:layout_height="wrap_content" android:textColor="@color/text_primary" android:textSize="13sp" android:maxLines="1" android:ellipsize="end"/>
-            <TextView android:id="@+id/tvTime" android:layout_width="match_parent" android:layout_height="wrap_content" android:textColor="@color/text_secondary" android:textSize="11sp"/>
-        </LinearLayout>
-        EOF
-
-        # ---------------------------------------------------------
-        # STEP 5: BUILD RELEASE
-        # ---------------------------------------------------------
         gradle assembleRelease
 
-    # ---------------------------------------------------------
-    # STEP 6: UPLOAD ALL SPLIT APKs
-    # ---------------------------------------------------------
     - uses: actions/upload-artifact@v4
       with: 
         name: TiviClone-Pro-Split-APKs
