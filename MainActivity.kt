@@ -82,7 +82,6 @@ class MainActivity : AppCompatActivity() {
     private val handler = Handler(Looper.getMainLooper())
     private val PICK_FILE = 101
 
-    // --- SHARED COOKIES ---
     private class BridgeCookieJar : CookieJar {
         private val manager = java.net.CookieManager.getDefault() as java.net.CookieManager
         override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
@@ -195,6 +194,7 @@ class MainActivity : AppCompatActivity() {
         playerView?.player = player
         playerView?.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL
     }
+
 
         private suspend fun resolveUrl(url: String): Pair<String, String?> {
         return withContext(Dispatchers.IO) {
@@ -439,6 +439,7 @@ class MainActivity : AppCompatActivity() {
     fun focusGroupList() { rvGroups?.requestFocus() }
     fun focusChannelList() { rvChannels?.requestFocus() }
 
+    // --- DELAYED SCROLL TO FIX FREEZE ---
     private fun syncEpgWithCurrentChannel() {
         epgContainer?.visibility = View.VISIBLE
         val curr = currentChannel ?: return
@@ -446,25 +447,27 @@ class MainActivity : AppCompatActivity() {
         val targetGroup = if (allData.containsKey("All Channels")) "All Channels" else curr.group
         val groupIndex = allData.keys.indexOf(targetGroup)
         
-        if (groupIndex != -1) {
-            (rvGroups?.adapter as? GroupAdapter)?.select(groupIndex)
-            rvGroups?.scrollToPosition(groupIndex)
-            
-            val adapter = rvChannels?.adapter as? ChannelAdapter
-            val channels = adapter?.getItems() ?: emptyList()
-            val channelIndex = channels.indexOfFirst { it.id == curr.id }
-            
-            if (channelIndex != -1) {
-                (rvChannels?.layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(channelIndex, 100)
-                rvChannels?.post {
-                    val vh = rvChannels?.findViewHolderForAdapterPosition(channelIndex)
-                    vh?.itemView?.requestFocus()
+        epgContainer?.post {
+            if (groupIndex != -1) {
+                (rvGroups?.adapter as? GroupAdapter)?.select(groupIndex)
+                rvGroups?.scrollToPosition(groupIndex)
+                
+                val adapter = rvChannels?.adapter as? ChannelAdapter
+                val channels = adapter?.getItems() ?: emptyList()
+                val channelIndex = channels.indexOfFirst { it.id == curr.id }
+                
+                if (channelIndex != -1) {
+                    (rvChannels?.layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(channelIndex, 100)
+                    rvChannels?.postDelayed({
+                        val vh = rvChannels?.findViewHolderForAdapterPosition(channelIndex)
+                        vh?.itemView?.requestFocus()
+                    }, 50) 
+                } else {
+                    rvGroups?.requestFocus()
                 }
             } else {
                 rvGroups?.requestFocus()
             }
-        } else {
-            rvGroups?.requestFocus()
         }
     }
 
@@ -555,4 +558,7 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() { super.onDestroy(); player?.release() }
 }
 
+
+
+    
     
